@@ -76,6 +76,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)/include;../External/glfw/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -90,6 +91,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)/include;../External/glfw/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -102,12 +104,14 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_GLFW_WIN32;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)/include;../External/glfw/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>$(VULKAN_SDK)\Lib\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -118,6 +122,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)/include;../External/glfw/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -127,7 +132,36 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\External\glfw\src\context.c" />
+    <ClCompile Include="..\External\glfw\src\egl_context.c" />
+    <ClCompile Include="..\External\glfw\src\glx_context.c" />
+    <ClCompile Include="..\External\glfw\src\init.c" />
+    <ClCompile Include="..\External\glfw\src\input.c" />
+    <ClCompile Include="..\External\glfw\src\monitor.c" />
+    <ClCompile Include="..\External\glfw\src\null_init.c" />
+    <ClCompile Include="..\External\glfw\src\null_joystick.c" />
+    <ClCompile Include="..\External\glfw\src\null_monitor.c" />
+    <ClCompile Include="..\External\glfw\src\null_window.c" />
+    <ClCompile Include="..\External\glfw\src\osmesa_context.c" />
+    <ClCompile Include="..\External\glfw\src\platform.c" />
+    <ClCompile Include="..\External\glfw\src\vulkan.c" />
+    <ClCompile Include="..\External\glfw\src\wgl_context.c" />
+    <ClCompile Include="..\External\glfw\src\win32_init.c" />
+    <ClCompile Include="..\External\glfw\src\win32_joystick.c" />
+    <ClCompile Include="..\External\glfw\src\win32_module.c" />
+    <ClCompile Include="..\External\glfw\src\win32_monitor.c" />
+    <ClCompile Include="..\External\glfw\src\win32_thread.c" />
+    <ClCompile Include="..\External\glfw\src\win32_time.c" />
+    <ClCompile Include="..\External\glfw\src\win32_window.c" />
+    <ClCompile Include="..\External\glfw\src\window.c" />
     <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\External\glfw\src\platform.h" />
+    <ClInclude Include="..\External\glfw\src\win32_joystick.h" />
+    <ClInclude Include="..\External\glfw\src\win32_platform.h" />
+    <ClInclude Include="..\External\glfw\src\win32_thread.h" />
+    <ClInclude Include="..\External\glfw\src\win32_time.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
