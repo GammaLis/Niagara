@@ -83,6 +83,13 @@ using namespace std;
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
+// How many frames 
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+// We choose the number of 2 because we don't want the CPU to get too far ahead of the GPU. With 2 frames in flight, the CPU and GPU
+// can be working on their own tasks at the same time. If the CPU finishes early, it will wait till the GPU finishes rendering before
+// submitting more work.
+// Each frame should have its own command buffer, set of semaphores, and fence.
+
 const std::vector<const char*> g_DeviceExtensions =
 {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -208,7 +215,7 @@ struct QueueFamilyIndices
 	// Therefore we have to take into account that there could be a dinstinct presentation queue.
 	std::optional<uint32_t> presentFamily;
 
-	bool IsComplete()
+	bool IsComplete() const
 	{
 		return graphicsFamily.has_value() && presentFamily.has_value();
 	}
@@ -501,8 +508,15 @@ VkSurfaceKHR GetWindowSurface(VkInstance instance, GLFWwindow *window)
 	return surface;
 }
 
-VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, GLFWwindow *window,
-	VkFormat &swapChainImageFormat, VkExtent2D &swapChainExtent)
+struct SwapChainInfo
+{
+	VkSurfaceCapabilitiesKHR capabilities;
+	VkSurfaceFormatKHR surfaceFormat;
+	VkPresentModeKHR presentMode;
+	VkExtent2D extent;
+};
+
+SwapChainInfo GetSwapChainInfo(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, GLFWwindow *window)
 {
 	SwapChainSupportDetails swapChainDetails = QuerySwapChainSupport(physicalDevice, surface);
 
@@ -510,16 +524,28 @@ VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, Vk
 	VkPresentModeKHR presentMode = ChooseSwapPresentMode(swapChainDetails.presentModes);
 	VkExtent2D extent = ChooseSwapExtent(swapChainDetails.capabilities, window);
 
-	// It is recommended to request at least one more image than the minimum
-	uint32_t imageCount = swapChainDetails.capabilities.minImageCount + 1;
-	if (swapChainDetails.capabilities.maxImageCount > 0 && imageCount > swapChainDetails.capabilities.maxImageCount)
-		imageCount = swapChainDetails.capabilities.maxImageCount;
-
-	swapChainImageFormat = surfaceFormat.format;
-	swapChainExtent = extent;
+	SwapChainInfo info{};
+	info.capabilities = swapChainDetails.capabilities;
+	info.surfaceFormat = surfaceFormat;
+	info.presentMode = presentMode;
+	info.extent = extent;
 
 	g_Format = surfaceFormat.format;
 	g_ViewportExtent = extent;
+
+	return info;
+}
+
+VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, const SwapChainInfo &info)
+{
+	VkSurfaceFormatKHR surfaceFormat = info.surfaceFormat;
+	VkPresentModeKHR presentMode = info.presentMode;
+	VkExtent2D extent = info.extent;
+
+	// It is recommended to request at least one more image than the minimum
+	uint32_t imageCount = info.capabilities.minImageCount + 1;
+	if (info.capabilities.maxImageCount > 0 && imageCount > info.capabilities.maxImageCount)
+		imageCount = info.capabilities.maxImageCount;
 
 	VkSwapchainCreateInfoKHR createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -555,7 +581,7 @@ VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, Vk
 
 	// We can specify that a certain transform should be applied to images in the swap chain if it is supported, like a 90 degree clockwise rotation or horizontal flip.
 	// To specify that you do not want any transformation, simply specify the current transformation.
-	createInfo.preTransform = swapChainDetails.capabilities.currentTransform;
+	createInfo.preTransform = info.capabilities.currentTransform;
 	// The `compositeAlpha` field specifies if the alpha channel should be used for blending with other windows in the window system.
 	// You'll almost always want to simply ignore the alpha channel.
 	createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -569,7 +595,7 @@ VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, Vk
 	return swapChain;
 }
 
-void GetSwapChainImages(std::vector<VkImage> &swapChainImages, VkDevice device, VkSwapchainKHR swapChain)
+void GetSwapChainImages(VkDevice device, std::vector<VkImage> &swapChainImages, VkSwapchainKHR swapChain)
 {
 	uint32_t imageCount;
 	vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
@@ -577,7 +603,7 @@ void GetSwapChainImages(std::vector<VkImage> &swapChainImages, VkDevice device, 
 	vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
 }
 
-void GetImageViews(std::vector<VkImageView> &imageViews, VkDevice device, const std::vector<VkImage> &images, VkFormat imageFormat)
+void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const std::vector<VkImage> &images, VkFormat imageFormat)
 {
 	imageViews.resize(images.size());
 
@@ -664,7 +690,7 @@ VkRenderPass GetRenderPass(VkDevice device)
 	// If you group these rendering operations into one render pass, then Vulkan is able to reorder the operations and conserve memory bandwidth
 	// for possibly better performance.
 	VkAttachmentReference colorAttachementRef{};
-	colorAttachementRef.attachment = 0;
+	colorAttachementRef.attachment = 0; // attachment index
 	colorAttachementRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 	VkSubpassDescription subpass{};
@@ -679,7 +705,7 @@ VkRenderPass GetRenderPass(VkDevice device)
 	createInfo.subpassCount = 1;
 	createInfo.pSubpasses = &subpass;
 
-	VkRenderPass renderPass;
+	VkRenderPass renderPass = VK_NULL_HANDLE;
 	VK_CHECK(vkCreateRenderPass(device, &createInfo, nullptr, &renderPass));
 
 	return renderPass;
@@ -701,7 +727,7 @@ struct GraphicsPipelineDetails
 		vkDestroyPipelineLayout(device, layout, nullptr);
 	}
 };
-VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkExtent2D viewportExtent)
+VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkRenderPass renderPass, VkExtent2D viewportExtent)
 {	
 	auto triVert = ReadFile("../Shaders/vert.spv");
 	auto triFrag = ReadFile("../Shaders/frag.spv");
@@ -776,7 +802,7 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	rasterizerStateCreateInfo.rasterizerDiscardEnable = VK_FALSE;
 	rasterizerStateCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizerStateCreateInfo.lineWidth = 1.0f;
-	rasterizerStateCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	rasterizerStateCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT; // VK_CULL_MODE_BACK_BIT VK_CULL_MODE_NONE
 	rasterizerStateCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
 	rasterizerStateCreateInfo.depthBiasEnable = VK_FALSE;
 	rasterizerStateCreateInfo.depthBiasConstantFactor = 0.0f;
@@ -819,7 +845,6 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	colorBlending.blendConstants[3] = 0.0f; // Optional
 
 	// Render pass
-	VkRenderPass renderPass = GetRenderPass(device);
 	pipeline.renderPass = renderPass;
 
 	// Pipeline layout
@@ -944,10 +969,18 @@ void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipelin
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
 	VkViewport viewport{};
+#if 1
 	viewport.x = 0.0f;
 	viewport.y = 0.0f;
 	viewport.width = static_cast<float>(g_ViewportExtent.width);
 	viewport.height = static_cast<float>(g_ViewportExtent.height);
+#else
+	// VK_CULL_MODE_NONE
+	viewport.x = 0.0f;
+	viewport.y = static_cast<float>(g_ViewportExtent.height);
+	viewport.width = static_cast<float>(g_ViewportExtent.width);
+	viewport.height = -static_cast<float>(g_ViewportExtent.height);
+#endif
 	viewport.minDepth = 0.0f;
 	viewport.maxDepth = 1.0f;
 	vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -978,6 +1011,7 @@ struct SyncObjects
 		vkDestroyFence(device, inFlightFence, nullptr);	
 	}
 };
+
 SyncObjects GetSyncObjects(VkDevice device)
 {
 	SyncObjects syncObjects{};
@@ -999,6 +1033,63 @@ SyncObjects GetSyncObjects(VkDevice device)
 	}
 
 	return syncObjects;
+}
+
+struct FrameResources
+{
+	VkCommandBuffer commandBuffer;
+	SyncObjects syncObjects;
+
+	void Cleanup(VkDevice device)
+	{
+		syncObjects.Cleanup(device);
+	}
+};
+
+void GetFrameResources(VkDevice device, std::vector<FrameResources> &frameResoruces, VkCommandPool commandPool)
+{
+	frameResoruces.resize(MAX_FRAMES_IN_FLIGHT);
+	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		frameResoruces[i].commandBuffer = GetCommandBuffer(device, commandPool);
+		frameResoruces[i].syncObjects = GetSyncObjects(device);
+	}
+}
+
+void CleanupSwapChain(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkImageView> swapChainImageViews, std::vector<VkFramebuffer> framebuffers)
+{
+	for(auto &view : swapChainImageViews)
+		vkDestroyImageView(device, view, nullptr);
+
+	for (auto &framebuffer : framebuffers)
+		vkDestroyFramebuffer(device, framebuffer, nullptr);
+
+	vkDestroySwapchainKHR(device, swapChain, nullptr);
+}
+
+void GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainKHR &swapChain, 
+	std::vector<VkImage> &swapChainImages, std::vector<VkImageView> &swapChainImageViews, std::vector<VkFramebuffer> &framebuffers,
+	VkSurfaceKHR surface, VkRenderPass renderPass, const SwapChainInfo &info)
+{
+	if (swapChain != VK_NULL_HANDLE)
+	{
+		// We shouldn't touch resources that may still be in use.
+		vkDeviceWaitIdle(device);
+
+		CleanupSwapChain(device, swapChain, swapChainImageViews, framebuffers);
+	}
+
+	swapChain = GetSwapChain(physicalDevice, device, surface, info);
+	assert(swapChain);
+
+	GetSwapChainImages(device, swapChainImages, swapChain);
+	assert(!swapChainImages.empty());
+
+	GetImageViews(device, swapChainImageViews, swapChainImages, info.surfaceFormat.format);
+	assert(!swapChainImageViews.empty());
+
+	GetFramebuffers(device, framebuffers, swapChainImageViews, renderPass);
+	assert(!framebuffers.empty());
 }
 
 /**
@@ -1074,8 +1165,6 @@ int main()
 {
 	cout << "Hello, Vulkan!" << endl;
 
-	
-
 	int rc = glfwInit();
 	if (rc == GLFW_FALSE) 
 	{
@@ -1112,28 +1201,41 @@ int main()
 	vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 	assert(presentQueue);
 
-	VkFormat swapChainImageFormat;
-	VkExtent2D swapChainExtent;
-	VkSwapchainKHR swapChain = GetSwapChain(physicalDevice, device, surface, window, swapChainImageFormat, swapChainExtent);
+	// Update swap chain surface format & extent
+	SwapChainInfo swapChainInfo = GetSwapChainInfo(physicalDevice, surface, window);
+
+	// Need swap chain surface format
+	VkRenderPass renderPass = GetRenderPass(device);
+
+	VkSwapchainKHR swapChain = VK_NULL_HANDLE;
+	std::vector<VkImage> swapChainImages;
+	std::vector<VkImageView> swapChainImageViews;
+	std::vector<VkFramebuffer> framebuffers;
+	
+#if 0
+	swapChain = GetSwapChain(physicalDevice, device, surface, swapChainInfo);
 	assert(swapChain);
 
 	// Retrieving the swap chain images
-	std::vector<VkImage> swapChainImages;
-	GetSwapChainImages(swapChainImages, device, swapChain);
+	GetSwapChainImages(device, swapChainImages, swapChain);
 	assert(!swapChainImages.empty());
-
-	std::vector<VkImageView> swapChainImageViews;
-	GetImageViews(swapChainImageViews, device, swapChainImages, swapChainImageFormat);
+	
+	GetImageViews(device, swapChainImageViews, swapChainImages, swapChainInfo.surfaceFormat.format);
 	assert(!swapChainImageViews.empty());
+
+	// Frame buffers
+	GetFramebuffers(device, framebuffers, swapChainImageViews, renderPass);
+	assert(!framebuffers.empty());
+
+#else
+	GetSwapChain(physicalDevice, device, swapChain, swapChainImages, swapChainImageViews, framebuffers,
+		surface, renderPass, swapChainInfo);
+#endif
 
 	// Pipeline
 	GraphicsPipelineDetails pipelineDetails{};
-	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, swapChainExtent);
+	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, renderPass, swapChainInfo.extent);
 
-	// Frame buffers
-	std::vector<VkFramebuffer> framebuffers;
-	GetFramebuffers(device, framebuffers, swapChainImageViews, pipelineDetails.renderPass);
-	
 	// Command buffers
 	VkCommandPool commandPool = GetCommandPool(device, indices);
 	assert(commandPool);
@@ -1148,14 +1250,25 @@ int main()
 	// rendering has finished and presentation can happen, and a fence to make sure only one frame is rendering at a time.
 	SyncObjects syncObjects = GetSyncObjects(device);
 
-	
-	
+	std::vector<FrameResources> frameResources;
+	GetFrameResources(device, frameResources, commandPool);
+
+	uint32_t currentFrame = 0;
+
+
+
+	// Main loop
 	while (!glfwWindowShouldClose(window))
 	{
 		glfwPollEvents();
-		Render(device, swapChain, syncObjects,
-			commandBuffer, pipelineDetails.renderPass, graphicsPipeline, framebuffers,
+
+		SyncObjects &currentSyncObjects = frameResources[currentFrame].syncObjects;
+		VkCommandBuffer currentCommandBuffer = frameResources[currentFrame].commandBuffer;
+		Render(device, swapChain, currentSyncObjects,
+			currentCommandBuffer, pipelineDetails.renderPass, graphicsPipeline, framebuffers,
 			graphicsQueue, presentQueue);
+
+		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
 	// Wait for the logical device to finish operations before exiting main loop and destroying the window
@@ -1167,23 +1280,20 @@ int main()
 	
 
 	// Clean up Vulkan
+
+	for (auto &frameResource : frameResources)
+	{
+		frameResource.Cleanup(device);
+	}
+	CleanupSwapChain(device, swapChain, swapChainImageViews, framebuffers);
+
 	syncObjects.Cleanup(device);
 	
 	vkDestroyCommandPool(device, commandPool, nullptr);
 	
-	for (auto &framebuffer : framebuffers)
-	{
-		vkDestroyFramebuffer(device, framebuffer, nullptr);
-	}
-	
 	pipelineDetails.Cleanup(device);
 	vkDestroyPipeline(device, graphicsPipeline, nullptr);
 
-	for (auto &imageView : swapChainImageViews)
-	{
-		vkDestroyImageView(device, imageView, nullptr);
-	}
-	vkDestroySwapchainKHR(device, swapChain, nullptr);
 	vkDestroyDevice(device, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);
 	vkDestroyInstance(instance, nullptr);
