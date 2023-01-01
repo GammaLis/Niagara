@@ -83,6 +83,26 @@ using namespace std;
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
+bool g_FramebufferResized = false;
+GLFWwindow* g_Window = nullptr;
+
+/// Window
+static void FramebufferResizeCallback(GLFWwindow * window, int width, int height)
+{
+	g_FramebufferResized = true;
+}
+
+
+/// Vulkan
+#ifdef NDEBUG
+const bool g_bEnableValidationLayers = false;
+#else
+const bool g_bEnableVadialtionLayers = true;
+#endif
+
+VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
+VkDevice g_Device = VK_NULL_HANDLE;
+
 // How many frames 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 // We choose the number of 2 because we don't want the CPU to get too far ahead of the GPU. With 2 frames in flight, the CPU and GPU
@@ -103,6 +123,32 @@ std::vector<VkDynamicState> g_DynamicStates =
 
 VkFormat g_Format;
 VkExtent2D g_ViewportExtent;
+
+VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT * pCreateInfo, const VkAllocationCallbacks * pAllocator, VkDebugUtilsMessengerEXT * pDebugMessenger)
+{
+	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+	if (func != nullptr)
+		return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+	else
+		return VK_ERROR_EXTENSION_NOT_PRESENT;
+}
+
+void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) 
+{
+	auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+	if (func != nullptr)
+		func(instance, debugMessenger, pAllocator);
+}
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, 
+	VkDebugUtilsMessageTypeFlagsEXT messageType,
+	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+	void* pUserData)
+{
+	std::cerr << "Validation layer: " << pCallbackData->pMessage << std::endl;
+	return VK_FALSE;
+}
 
 bool CheckValidationLayerSupport(const std::vector<const char*> &validationLayers) 
 {
@@ -132,6 +178,40 @@ bool CheckValidationLayerSupport(const std::vector<const char*> &validationLayer
 	return true;
 }
 
+std::vector<const char*> GetRequiredExtensions()
+{
+	uint32_t glfwExtensionCount = 0;
+	const char** glfwExtensions;
+	glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+
+	if (g_bEnableVadialtionLayers)
+		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+	return extensions;
+}
+
+void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
+{
+	createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+	createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; // | VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
+	createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	createInfo.pfnUserCallback = DebugCallback;
+	createInfo.pUserData = nullptr; // Optional
+}
+
+VkDebugUtilsMessengerEXT SetupDebugMessenger(VkInstance instance)
+{
+	VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+	PopulateDebugMessengerCreateInfo(createInfo);
+
+	VkDebugUtilsMessengerEXT debugMessenger;
+	VK_CHECK(CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger));
+
+	return debugMessenger;
+}
+
 // The very first thing you need to do is initialize the Vulkan library by creating an instance. 
 // The instance is the connection between your application and the Vulkan library and creating it 
 // involves specifying some details about your application to the driver.
@@ -154,42 +234,36 @@ VkInstance GetVulkanInstance()
 		"VK_LAYER_KHRONOS_validation"
 	};
 
-#ifdef NDEBUG
-	const bool bEnableValidationLayers = false;
-#else
-	const bool bEnableVadialtionLayers = true;
-#endif
-
-	assert(!bEnableVadialtionLayers || CheckValidationLayerSupport(validationLayers));
+	assert(!g_bEnableVadialtionLayers || CheckValidationLayerSupport(validationLayers));
 
 	std::vector<const char*> extensions = {
 		VK_KHR_SURFACE_EXTENSION_NAME
 	};
 
-	uint32_t glfwExtensionCount = 0;
-	const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+	extensions = GetRequiredExtensions();
 
 	VkInstance instance = VK_NULL_HANDLE;
 	{
 		VkInstanceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		createInfo.pApplicationInfo = &appInfo;
-		if (bEnableVadialtionLayers)
+		createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+		createInfo.ppEnabledExtensionNames = extensions.data();
+
+		VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+		if (g_bEnableVadialtionLayers)
 		{
 			createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 			createInfo.ppEnabledLayerNames = validationLayers.data();
+
+			PopulateDebugMessengerCreateInfo(debugCreateInfo);
+			createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
 		}
 		else 
 		{
 			createInfo.enabledLayerCount = 0;
+			createInfo.pNext = nullptr;
 		}
-#if 0
-		createInfo.enabledExtensionCount = static_cast<uint32_t>( extensions.size() );
-		createInfo.ppEnabledExtensionNames = extensions.data();
-#else
-		createInfo.ppEnabledExtensionNames = glfwExtensions;
-		createInfo.enabledExtensionCount = glfwExtensionCount;
-#endif
 
 		VK_CHECK(vkCreateInstance(&createInfo, nullptr, &instance));
 	}
@@ -524,6 +598,16 @@ SwapChainInfo GetSwapChainInfo(VkPhysicalDevice physicalDevice, VkSurfaceKHR sur
 	VkPresentModeKHR presentMode = ChooseSwapPresentMode(swapChainDetails.presentModes);
 	VkExtent2D extent = ChooseSwapExtent(swapChainDetails.capabilities, window);
 
+	// Handling minimization
+	{
+		while (extent.width == 0 || extent.height == 0)
+		{
+			glfwWaitEvents();
+			swapChainDetails = QuerySwapChainSupport(physicalDevice, surface);
+			extent = ChooseSwapExtent(swapChainDetails.capabilities, window);
+		}
+	}
+
 	SwapChainInfo info{};
 	info.capabilities = swapChainDetails.capabilities;
 	info.surfaceFormat = surfaceFormat;
@@ -729,8 +813,8 @@ struct GraphicsPipelineDetails
 };
 VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkRenderPass renderPass, VkExtent2D viewportExtent)
 {	
-	auto triVert = ReadFile("../Shaders/vert.spv");
-	auto triFrag = ReadFile("../Shaders/frag.spv");
+	auto triVert = ReadFile("../Shaders/SimpleTriangle.vert.spv");
+	auto triFrag = ReadFile("../Shaders/SimpleTriangle.frag.spv");
 
 	pipeline.vertexShader = GetShaderModule(device, triVert);
 	pipeline.fragmentShader = GetShaderModule(device, triFrag);
@@ -1092,34 +1176,10 @@ void GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainK
 	assert(!framebuffers.empty());
 }
 
-/**
- * Outline of a frame
- * * Wait for the previous frame to finish
- * * Acquire an image from the swap chain
- * * Record a command buffer which draws the scene onto that image
- * * Submit the recorded command buffer
- * * Present the swap chain image
- */
-void Render(VkDevice device, VkSwapchainKHR swapChain, SyncObjects &syncObjects,
-	VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, std::vector<VkFramebuffer> &framebuffers,
-	VkQueue graphicsQueue, VkQueue presentQueue)
+
+void Render(VkDevice device, VkSwapchainKHR &swapChain, SyncObjects &syncObjects, uint32_t imageIndex,
+	VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, std::vector<VkFramebuffer> &framebuffers, VkQueue graphicsQueue)
 {
-	// Semaphores
-	// A semaphores is used to add order between queue operations.
-	// There happens to be 2 kinds of semaphores in Vulkan, binary and timeline.
-	// A semaphores is either unsignaled or signaled. It begins life as unsignaled. The way we use a semaphore to order queue operations is
-	// by providing the same semaphore as a `signal` semaphore in one queue operation and as a `wait` semaphore in another queue operation.
-
-	// Fences
-	// A fence has a similar purpose, in that it is used to synchronize execution, but it is for ordering the execution on the CPU.
-	// Simply put, if the host needs to know when the GPU has finished something, we use a fence.
-
-	vkWaitForFences(device, 1, &syncObjects.inFlightFence, VK_TRUE, UINT64_MAX);
-	vkResetFences(device, 1, &syncObjects.inFlightFence);
-
-	uint32_t imageIndex;
-	vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, syncObjects.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
-
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
 	RecordCommandBuffer(cmd, renderPass, graphicsPipeline, framebuffers, imageIndex);
@@ -1133,7 +1193,7 @@ void Render(VkDevice device, VkSwapchainKHR swapChain, SyncObjects &syncObjects,
 	submitInfo.waitSemaphoreCount  = ARRAYSIZE(waitSemaphores);
 	submitInfo.pWaitSemaphores = waitSemaphores;
 	submitInfo.pWaitDstStageMask = waitStages;
-	
+
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &cmd;
 
@@ -1142,22 +1202,6 @@ void Render(VkDevice device, VkSwapchainKHR swapChain, SyncObjects &syncObjects,
 	submitInfo.signalSemaphoreCount = ARRAYSIZE(signalSemaphores);
 
 	VK_CHECK(vkQueueSubmit(graphicsQueue, 1, &submitInfo, syncObjects.inFlightFence));
-
-	// Presentation
-	VkPresentInfoKHR presentInfo{};
-	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-
-	presentInfo.waitSemaphoreCount = 1;
-	presentInfo.pWaitSemaphores = signalSemaphores;
-
-	VkSwapchainKHR swapChains[] = { swapChain };
-	presentInfo.swapchainCount = ARRAYSIZE(swapChains);
-	presentInfo.pSwapchains = swapChains;
-	presentInfo.pImageIndices = &imageIndex;
-
-	presentInfo.pResults = nullptr;
-
-	vkQueuePresentKHR(presentQueue, &presentInfo);
 }
 
 
@@ -1165,6 +1209,7 @@ int main()
 {
 	cout << "Hello, Vulkan!" << endl;
 
+	// Window
 	int rc = glfwInit();
 	if (rc == GLFW_FALSE) 
 	{
@@ -1173,22 +1218,34 @@ int main()
 	}
 	// Because GLFW was originally designed to create an OpenGL context, we need to tell it to not create an OpenGL context
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Niagara", nullptr, nullptr);
+	g_Window = window;
+	glfwSetWindowUserPointer(window, nullptr);
+	glfwSetFramebufferSizeCallback(window, FramebufferResizeCallback);
 
+	// Vulkan
 	VkInstance instance = GetVulkanInstance();
 	assert(instance);
+
+	VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+	if (g_bEnableVadialtionLayers)
+	{
+		debugMessenger = SetupDebugMessenger(instance);
+		assert(debugMessenger);
+	}
 
 	VkSurfaceKHR surface = GetWindowSurface(instance, window);
 	assert(surface);
 
 	VkPhysicalDevice physicalDevice = GetPhysicalDevice(instance, surface);
 	assert(physicalDevice);
+	g_PhysicalDevice = physicalDevice;
 
 	QueueFamilyIndices indices = FindQueueFamilies(physicalDevice, surface);
 
 	VkDevice device = GetLogicalDevice(physicalDevice, indices);
 	assert(device);
+	g_Device = device;
 
 	// Retrieving queue handles
 	VkQueue graphicsQueue = VK_NULL_HANDLE;
@@ -1243,8 +1300,6 @@ int main()
 	VkCommandBuffer commandBuffer = GetCommandBuffer(device, commandPool);
 	assert(commandBuffer);
 
-	RecordCommandBuffer(commandBuffer, pipelineDetails.renderPass, graphicsPipeline, framebuffers, 0);
-
 	// Creating the synchronization objects
 	// We'll need one semaphore to signal that an image has been acquired from the swapchain and is ready for rendering, another one to signal that
 	// rendering has finished and presentation can happen, and a fence to make sure only one frame is rendering at a time.
@@ -1255,18 +1310,75 @@ int main()
 
 	uint32_t currentFrame = 0;
 
-
+	// SPACE
 
 	// Main loop
+	/**
+	 * Outline of a frame
+	 * * Wait for the previous frame to finish
+	 * * Acquire an image from the swap chain
+	 * * Record a command buffer which draws the scene onto that image
+	 * * Submit the recorded command buffer
+	 * * Present the swap chain image
+	 */
 	while (!glfwWindowShouldClose(window))
 	{
 		glfwPollEvents();
 
+		// Get resources
 		SyncObjects &currentSyncObjects = frameResources[currentFrame].syncObjects;
 		VkCommandBuffer currentCommandBuffer = frameResources[currentFrame].commandBuffer;
-		Render(device, swapChain, currentSyncObjects,
-			currentCommandBuffer, pipelineDetails.renderPass, graphicsPipeline, framebuffers,
-			graphicsQueue, presentQueue);
+
+		// Semaphores
+		// A semaphores is used to add order between queue operations.
+		// There happens to be 2 kinds of semaphores in Vulkan, binary and timeline.
+		// A semaphores is either unsignaled or signaled. It begins life as unsignaled. The way we use a semaphore to order queue operations is
+		// by providing the same semaphore as a `signal` semaphore in one queue operation and as a `wait` semaphore in another queue operation.
+
+		// Fences
+		// A fence has a similar purpose, in that it is used to synchronize execution, but it is for ordering the execution on the CPU.
+		// Simply put, if the host needs to know when the GPU has finished something, we use a fence.
+
+		// Fetch back buffer
+		vkWaitForFences(device, 1, &currentSyncObjects.inFlightFence, VK_TRUE, UINT64_MAX);
+		
+		uint32_t imageIndex = 0;
+		VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, currentSyncObjects.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || g_FramebufferResized)
+		{
+			swapChainInfo = GetSwapChainInfo(physicalDevice, surface, window);
+			GetSwapChain(physicalDevice, device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
+			assert(swapChain);
+			g_FramebufferResized = false;
+			continue;
+		}
+
+		// Only reset the fence if we are submitting work
+		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
+
+		Render(device, swapChain, currentSyncObjects, imageIndex,
+			currentCommandBuffer, pipelineDetails.renderPass, graphicsPipeline, framebuffers, graphicsQueue);
+
+		// Present
+		{
+			VkSwapchainKHR presentSwapChains[] = { swapChain };
+			VkPresentInfoKHR presentInfo{};
+			presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+			presentInfo.pSwapchains = presentSwapChains;
+			presentInfo.swapchainCount = ARRAYSIZE(presentSwapChains);
+			presentInfo.pWaitSemaphores = &currentSyncObjects.renderFinishedSemaphore;
+			presentInfo.waitSemaphoreCount = 1;
+			presentInfo.pImageIndices = &imageIndex;
+
+			result = vkQueuePresentKHR(presentQueue, &presentInfo);
+			if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || g_FramebufferResized)
+			{
+				swapChainInfo = GetSwapChainInfo(physicalDevice, surface, window);
+				GetSwapChain(physicalDevice, device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
+				assert(swapChain);
+				g_FramebufferResized = false;
+			}
+		}
 
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
@@ -1277,7 +1389,7 @@ int main()
 	glfwDestroyWindow(window);
 	glfwTerminate();
 
-	
+	// SPACE
 
 	// Clean up Vulkan
 
@@ -1296,6 +1408,9 @@ int main()
 
 	vkDestroyDevice(device, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);
+
+	if (g_bEnableVadialtionLayers)
+		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 	vkDestroyInstance(instance, nullptr);
 
 	return 0;

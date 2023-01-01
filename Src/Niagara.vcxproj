@@ -115,6 +115,13 @@
       <AdditionalDependencies>vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(VULKAN_SDK)\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
+    <CustomBuild />
+    <CustomBuild>
+      <Outputs>..\Shaders\%(FileName).spv;%(Outputs)</Outputs>
+      <Command>$(VULKAN_SDK)\Bin\glslangValidator %(FullPath) -V -o ..\Shaders\%(FileName).spv</Command>
+      <AdditionalInputs>
+      </AdditionalInputs>
+    </CustomBuild>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -164,6 +171,14 @@
     <ClInclude Include="..\External\glfw\src\win32_platform.h" />
     <ClInclude Include="..\External\glfw\src\win32_thread.h" />
     <ClInclude Include="..\External\glfw\src\win32_time.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleTriangle.vert.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

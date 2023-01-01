@@ -16,6 +16,9 @@
     <Filter Include="glfw">
       <UniqueIdentifier>{05c2c39c-d6a8-430c-a93d-a5260d98dffd}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{6d602dd0-ef8c-4bee-97fc-742099cf8a32}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -104,5 +107,13 @@
     <ClInclude Include="..\External\glfw\src\win32_time.h">
       <Filter>glfw</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleTriangle.vert.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
   </ItemGroup>
 </Project>
