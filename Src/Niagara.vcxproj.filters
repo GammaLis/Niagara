@@ -19,6 +19,12 @@
     <Filter Include="Shaders">
       <UniqueIdentifier>{6d602dd0-ef8c-4bee-97fc-742099cf8a32}</UniqueIdentifier>
     </Filter>
+    <Filter Include="volk">
+      <UniqueIdentifier>{77982598-f75e-409e-bbcf-5f05fb360981}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="meshoptimizer">
+      <UniqueIdentifier>{c99410bc-4ea3-461d-a8cc-5903949d928d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -90,6 +96,54 @@
     <ClCompile Include="..\External\glfw\src\null_window.c">
       <Filter>glfw</Filter>
     </ClCompile>
+    <ClCompile Include="..\External\volk\volk.c">
+      <Filter>volk</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\allocator.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\clusterizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\indexcodec.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\indexgenerator.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\overdrawanalyzer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\overdrawoptimizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\simplifier.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\spatialorder.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\stripifier.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\vcacheanalyzer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\vcacheoptimizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\vertexcodec.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\vertexfilter.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\vfetchanalyzer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -107,12 +161,24 @@
     <ClInclude Include="..\External\glfw\src\win32_time.h">
       <Filter>glfw</Filter>
     </ClInclude>
+    <ClInclude Include="..\External\volk\volk.h">
+      <Filter>volk</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\meshoptimizer\src\meshoptimizer.h">
+      <Filter>meshoptimizer</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
     <CustomBuild Include="..\Shaders\SimpleTriangle.vert.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleMesh.frag.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleMesh.vert.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
   </ItemGroup>

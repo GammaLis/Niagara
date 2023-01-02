@@ -106,7 +106,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_GLFW_WIN32;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\glfw\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\glfw\include;..\External\glm;..\External\volk;..\External\fast_obj;..\External\meshoptimizer\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
@@ -117,8 +117,8 @@
     </Link>
     <CustomBuild />
     <CustomBuild>
-      <Outputs>..\Shaders\%(FileName).spv;%(Outputs)</Outputs>
-      <Command>$(VULKAN_SDK)\Bin\glslangValidator %(FullPath) -V -o ..\Shaders\%(FileName).spv</Command>
+      <Outputs>.\CompiledShaders\%(FileName).spv;%(Outputs)</Outputs>
+      <Command>$(VULKAN_SDK)\Bin\glslangValidator %(FullPath) -V -o .\CompiledShaders\%(FileName).spv</Command>
       <AdditionalInputs>
       </AdditionalInputs>
     </CustomBuild>
@@ -163,6 +163,22 @@
     <ClCompile Include="..\External\glfw\src\win32_time.c" />
     <ClCompile Include="..\External\glfw\src\win32_window.c" />
     <ClCompile Include="..\External\glfw\src\window.c" />
+    <ClCompile Include="..\External\meshoptimizer\src\allocator.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\clusterizer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\indexcodec.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\indexgenerator.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\overdrawanalyzer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\overdrawoptimizer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\simplifier.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\spatialorder.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\stripifier.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\vcacheanalyzer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\vcacheoptimizer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\vertexcodec.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\vertexfilter.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\vfetchanalyzer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp" />
+    <ClCompile Include="..\External\volk\volk.c" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -171,12 +187,22 @@
     <ClInclude Include="..\External\glfw\src\win32_platform.h" />
     <ClInclude Include="..\External\glfw\src\win32_thread.h" />
     <ClInclude Include="..\External\glfw\src\win32_time.h" />
+    <ClInclude Include="..\External\meshoptimizer\src\meshoptimizer.h" />
+    <ClInclude Include="..\External\volk\volk.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
     <CustomBuild Include="..\Shaders\SimpleTriangle.vert.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="..\Shaders\SimpleMesh.frag.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleMesh.vert.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
   </ItemGroup>
