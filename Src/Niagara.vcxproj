@@ -118,7 +118,8 @@
     <CustomBuild />
     <CustomBuild>
       <Outputs>.\CompiledShaders\%(FileName).spv;%(Outputs)</Outputs>
-      <Command>$(VULKAN_SDK)\Bin\glslangValidator %(FullPath) -V -o .\CompiledShaders\%(FileName).spv</Command>
+      <Command>$(VULKAN_SDK)\Bin\glslangValidator %(FullPath) -V --target-env vulkan1.3 -o .\CompiledShaders\%(FileName).spv
+</Command>
       <AdditionalInputs>
       </AdditionalInputs>
     </CustomBuild>

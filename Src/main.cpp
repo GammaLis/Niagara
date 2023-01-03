@@ -54,11 +54,16 @@ using namespace std;
 #define DRAW_MODE DRAW_SIMPLE_MESH
 
 #define VERTEX_INPUT_MODE 1
+#define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 
 struct Vertex
 {
 	glm::vec3 p;
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
+	glm::u8vec4 n;
+#else
 	glm::vec3 n;
+#endif
 	glm::vec2 uv;
 
 	static VkVertexInputBindingDescription GetBindingDescription()
@@ -208,7 +213,9 @@ static const uint32_t g_BufferSize = 128 * 1024 * 1024;
 const std::vector<const char*> g_DeviceExtensions =
 {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME
+	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
+	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -641,19 +648,40 @@ VkDevice GetLogicalDevice(VkPhysicalDevice physicalDevice, const QueueFamilyIndi
 	}
 #endif
 
+	VkDeviceCreateInfo createInfo{};
+	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	createInfo.pQueueCreateInfos = queueCreateInfos.data();
+	createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+	createInfo.ppEnabledExtensionNames = g_DeviceExtensions.data();
+	createInfo.enabledExtensionCount = static_cast<uint32_t>(g_DeviceExtensions.size());
+	// The `enabledLayerCount` and `ppEnabledLayerNames` fields of `VkDeviceCreateInfo` are ignored by up-to-date implementations.
+
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
+	VkPhysicalDevice8BitStorageFeatures features8Bit{};
+	features8Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
+	features8Bit.storageBuffer8BitAccess = true;
+
+	VkPhysicalDevice16BitStorageFeatures features16Bit{};
+	features16Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+	features16Bit.storageBuffer16BitAccess = true;
+
+	// Specifying used device features
+	VkPhysicalDeviceFeatures2 deviceFeatures{};
+	deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+	deviceFeatures.pNext = &features16Bit;
+	features16Bit.pNext = &features8Bit;
+
+	createInfo.pNext = &deviceFeatures;
+
+#else
 	// Specifying used device features
 	VkPhysicalDeviceFeatures deviceFeatures{};
 	// TODO: Is this needed ?
 	// deviceFeatures.vertexPipelineStoresAndAtomics = true;
 
-	VkDeviceCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-	createInfo.pQueueCreateInfos = queueCreateInfos.data();
-	createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
 	createInfo.pEnabledFeatures = &deviceFeatures;
-	createInfo.ppEnabledExtensionNames = g_DeviceExtensions.data();
-	createInfo.enabledExtensionCount = static_cast<uint32_t>(g_DeviceExtensions.size());
-	// The `enabledLayerCount` and `ppEnabledLayerNames` fields of `VkDeviceCreateInfo` are ignored by up-to-date implementations.
+#endif
 
 	VkDevice device = VK_NULL_HANDLE;
 	VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, nullptr, &device));
@@ -1411,10 +1439,18 @@ bool LoadObj(std::vector<Vertex> &vertices, const char* path)
 			v.p.x = obj->positions[objIndex.p * 3 + 0];
 			v.p.y = obj->positions[objIndex.p * 3 + 1];
 			v.p.z = obj->positions[objIndex.p * 3 + 2];
+
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
 			// N
-			v.n.x = obj->normals[objIndex.n * 3 + 0]; //  * 127.f + 127.5f;
-			v.n.y = obj->normals[objIndex.n * 3 + 1]; //  * 127.f + 127.5f;
-			v.n.z = obj->normals[objIndex.n * 3 + 2]; //  * 127.f + 127.5f;
+			v.n.x = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 0] * 127.f + 127.5f);
+			v.n.y = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 1] * 127.f + 127.5f);
+			v.n.z = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 2] * 127.f + 127.5f);
+#else
+			// N
+			v.n.x = obj->normals[objIndex.n * 3 + 0];
+			v.n.y = obj->normals[objIndex.n * 3 + 1];
+			v.n.z = obj->normals[objIndex.n * 3 + 2];
+#endif
 			// UV
 			v.uv.x = obj->texcoords[objIndex.t * 2 + 0];
 			v.uv.y = obj->texcoords[objIndex.t * 2 + 1];
