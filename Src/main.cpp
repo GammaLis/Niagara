@@ -53,6 +53,8 @@ using namespace std;
 
 #define DRAW_MODE DRAW_SIMPLE_MESH
 
+#define VERTEX_INPUT_MODE 1
+
 struct Vertex
 {
 	glm::vec3 p;
@@ -85,25 +87,25 @@ struct Vertex
 		// uvec4	VK_FORMAT_R32G32B32A32_UINT
 		// double	VK_FORMAT_R64_SFLOAT
 
-		uint32_t vertexAtrribOffset = 0;
+		uint32_t vertexAttribOffset = 0;
 
 		attributeDescs[0].binding = 0;
 		attributeDescs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescs[0].location = 0;
-		attributeDescs[0].offset = offsetof(Vertex, p); // vertexAtrribOffset 
-		vertexAtrribOffset += 3 * 4;
+		attributeDescs[0].offset = offsetof(Vertex, p); // vertexAttribOffset 
+		vertexAttribOffset += 3 * 4;
 
 		attributeDescs[1].binding = 0;
 		attributeDescs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescs[1].location = 1;
-		attributeDescs[1].offset = offsetof(Vertex, n); // vertexAtrribOffset;
-		vertexAtrribOffset += 3 * 4;
+		attributeDescs[1].offset = offsetof(Vertex, n); // vertexAttribOffset;
+		vertexAttribOffset += 3 * 4;
 
 		attributeDescs[2].binding = 0;
 		attributeDescs[2].format = VK_FORMAT_R32G32_SFLOAT;
 		attributeDescs[2].location = 2;
-		attributeDescs[2].offset = offsetof(Vertex, uv); // vertexAtrribOffset;
-		vertexAtrribOffset += 2 * 4;
+		attributeDescs[2].offset = offsetof(Vertex, uv); // vertexAttribOffset;
+		vertexAttribOffset += 2 * 4;
 
 		return attributeDescs;
 	}
@@ -129,7 +131,7 @@ struct GpuBuffer
 /**
 * What it takes to draw a triangle
 * 1. Instance and physical device selection
-* 2. Logical devicen and queue families
+* 2. Logical device and queue families
 * 3. Window surface and swap chain
 * 4. Image views and framebuffers
 * 5. Render passes
@@ -147,7 +149,7 @@ struct GpuBuffer
 * * Create the framebuffers for the render pass
 * * Set up the graphics pipeline
 * * Allocate and record a command buffer with the draw commands for every possible swap chain image 
-* * Draw frames by aquiring images, submitting the right draw command buffers and returing the images back to the swap chain
+* * Draw frames by acquiring images, submitting the right draw command buffers and returning the images back to the swap chain
 */
 
 /**
@@ -159,7 +161,7 @@ struct GpuBuffer
 * createInfo.pNext = nullptr;
 * createInfo.foo = ...;
 * createInfo.bar = ...;
-* Many structures in Vulkan requre you to explicitly specify the type of structure in the `sType` member. The `pNext` member
+* Many structures in Vulkan require you to explicitly specify the type of structure in the `sType` member. The `pNext` member
 * can point to an extension structure and will always be `nullptr` in this tutorial.
 * Almost all functions return a `VkResult` that is either `VK_SUCCESS` or an error code.
 */
@@ -188,7 +190,7 @@ static void FramebufferResizeCallback(GLFWwindow * window, int width, int height
 #ifdef NDEBUG
 const bool g_bEnableValidationLayers = false;
 #else
-const bool g_bEnableVadialtionLayers = true;
+const bool g_bEnableValidationLayers = true;
 #endif
 
 VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
@@ -205,7 +207,8 @@ static const uint32_t g_BufferSize = 128 * 1024 * 1024;
 
 const std::vector<const char*> g_DeviceExtensions =
 {
-	VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -279,7 +282,7 @@ std::vector<const char*> GetRequiredExtensions()
 
 	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
-	if (g_bEnableVadialtionLayers)
+	if (g_bEnableValidationLayers)
 		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
 	return extensions;
@@ -327,7 +330,7 @@ VkInstance GetVulkanInstance()
 		"VK_LAYER_KHRONOS_validation"
 	};
 
-	assert(!g_bEnableVadialtionLayers || CheckValidationLayerSupport(validationLayers));
+	assert(!g_bEnableValidationLayers || CheckValidationLayerSupport(validationLayers));
 
 	std::vector<const char*> extensions = {
 		VK_KHR_SURFACE_EXTENSION_NAME
@@ -344,7 +347,7 @@ VkInstance GetVulkanInstance()
 		createInfo.ppEnabledExtensionNames = extensions.data();
 
 		VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-		if (g_bEnableVadialtionLayers)
+		if (g_bEnableValidationLayers)
 		{
 			createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 			createInfo.ppEnabledLayerNames = validationLayers.data();
@@ -372,14 +375,14 @@ VkInstance GetVulkanInstance()
 
 /**
 * Anything from drawing to uploading textures, requires commands to be submitted to a queue. There are different types of queues
-* that originate from different queue families and each famlity of queues allows only a subset of commands. For example, there could
+* that originate from different queue families and each family of queues allows only a subset of commands. For example, there could
 * be a queue family that only allows processing of compute commands or one that only allows memory transfer related commands.
 */
 struct QueueFamilyIndices
 {
 	std::optional<uint32_t> graphicsFamily;
 	// It's actually possible that the queue families supporting drawing commands and the ones supporting presentation do not overlap.
-	// Therefore we have to take into account that there could be a dinstinct presentation queue.
+	// Therefore we have to take into account that there could be a distinct presentation queue.
 	std::optional<uint32_t> presentFamily;
 
 	bool IsComplete() const
@@ -578,15 +581,15 @@ int RateDeviceSuitability(VkPhysicalDevice device)
 	return score;
 }
 
-VkPhysicalDevice GetPhysicalDevice(VkPhysicalDevice *phsicalDevices, uint32_t physicalDeviceCount, VkSurfaceKHR surface)
+VkPhysicalDevice GetPhysicalDevice(VkPhysicalDevice *physicalDevices, uint32_t physicalDeviceCount, VkSurfaceKHR surface)
 {
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
 	for (uint32_t i = 0; i < physicalDeviceCount; ++i)
 	{
-		if (IsDeviceSuitable(phsicalDevices[i], surface)) 
+		if (IsDeviceSuitable(physicalDevices[i], surface))
 		{
-			physicalDevice = phsicalDevices[i];
+			physicalDevice = physicalDevices[i];
 			break;
 		}
 	}
@@ -640,6 +643,8 @@ VkDevice GetLogicalDevice(VkPhysicalDevice physicalDevice, const QueueFamilyIndi
 
 	// Specifying used device features
 	VkPhysicalDeviceFeatures deviceFeatures{};
+	// TODO: Is this needed ?
+	// deviceFeatures.vertexPipelineStoresAndAtomics = true;
 
 	VkDeviceCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -792,7 +797,7 @@ void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const 
 	createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
 	createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
 	createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-	// The `busresourceRange` field describes what the image's purpose is and which part of the image should be accessed.
+	// The `subresourceRange` field describes what the image's purpose is and which part of the image should be accessed.
 	createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 	createInfo.subresourceRange.baseMipLevel = 0;
 	createInfo.subresourceRange.levelCount = 1;
@@ -896,12 +901,16 @@ struct GraphicsPipelineDetails
 	VkRenderPass renderPass;
 	VkPipelineLayout layout;
 
+	std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
+
 	void Cleanup(VkDevice device)
 	{
 		vkDestroyShaderModule(device, vertexShader, nullptr);
 		vkDestroyShaderModule(device, fragmentShader, nullptr);
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyPipelineLayout(device, layout, nullptr);
+		for (const auto &setLayout : descriptorSetLayouts)
+			vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
 	}
 };
 VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkRenderPass renderPass, VkExtent2D viewportExtent)
@@ -946,10 +955,12 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 
 	VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo{};
 	vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+#if VERTEX_INPUT_MODE != 1
 	vertexInputCreateInfo.pVertexBindingDescriptions = &bindingDesc;
 	vertexInputCreateInfo.vertexBindingDescriptionCount = 1;
 	vertexInputCreateInfo.pVertexAttributeDescriptions = vertexAttribDescs.data();
 	vertexInputCreateInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttribDescs.size());
+#endif
 
 	// Input assembly
 	VkPipelineInputAssemblyStateCreateInfo inputCreateInfo{};
@@ -1033,15 +1044,37 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	pipeline.renderPass = renderPass;
 
 	// Pipeline layout
-	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+	VkDescriptorSetLayoutBinding setBinding[1] = {};
+	setBinding[0].binding = 0;
+	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	setBinding[0].descriptorCount = 1;
+	setBinding[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+	VkDescriptorSetLayoutCreateInfo setCreateInfo{};
+	setCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	setCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+	setCreateInfo.bindingCount = ARRAYSIZE(setBinding);
+	setCreateInfo.pBindings = setBinding;
+
+	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+	VK_CHECK(vkCreateDescriptorSetLayout(device, &setCreateInfo, nullptr, &setLayout));
+
+	pipeline.descriptorSetLayouts.push_back(setLayout);
+
 	VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
 	pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutCreateInfo.setLayoutCount = 0; // Optional
-	pipelineLayoutCreateInfo.pSetLayouts = nullptr; // Optional
+	pipelineLayoutCreateInfo.setLayoutCount = 1;
+	pipelineLayoutCreateInfo.pSetLayouts = &setLayout;
 	pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
 	pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
+
+	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 	VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
+
 	pipeline.layout = pipelineLayout;
+
+	// Destroyed in `pipeline`
+	// vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
 
 	// ==>
 	
@@ -1125,7 +1158,7 @@ VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool)
 	return commandBuffer;
 }
 
-void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, 
+void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, const GraphicsPipelineDetails &pipelineDetails,
 	const std::vector<VkFramebuffer> &framebuffers, const GpuBuffer&vb, const GpuBuffer&ib, uint32_t imageIndex)
 {
 	VkCommandBufferBeginInfo beginInfo{};
@@ -1154,8 +1187,25 @@ void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipelin
 	// Basic drawing commands
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
+#if VERTEX_INPUT_MODE == 1
+	VkDescriptorBufferInfo descBufferInfo{};
+	descBufferInfo.buffer = vb.buffer;
+	descBufferInfo.offset = 0;
+	descBufferInfo.range = vb.size;
+
+	VkWriteDescriptorSet writeDescriptors[1] = {};
+	writeDescriptors[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writeDescriptors[0].dstBinding = 0;
+	writeDescriptors[0].descriptorCount = 1;
+	writeDescriptors[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writeDescriptors[0].pBufferInfo = &descBufferInfo;
+
+	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.layout, 0, ARRAYSIZE(writeDescriptors), writeDescriptors);
+	
+#else
 	VkDeviceSize offset = 0;
 	vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
+#endif
 	if (ib.size > 0)
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
@@ -1185,7 +1235,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipelin
 	uint32_t vertexCount = static_cast<uint32_t>(vb.size / sizeof(Vertex));
 	uint32_t indexCount = static_cast<uint32_t>(ib.size / sizeof(uint32_t));
 	if (ib.size > 0)
-		vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 1);
+		vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
 	else
 		vkCmdDraw(cmd, vertexCount, 1, 0, 0);
 #else
@@ -1246,17 +1296,17 @@ struct FrameResources
 	}
 };
 
-void GetFrameResources(VkDevice device, std::vector<FrameResources> &frameResoruces, VkCommandPool commandPool)
+void GetFrameResources(VkDevice device, std::vector<FrameResources> &frameResources, VkCommandPool commandPool)
 {
-	frameResoruces.resize(MAX_FRAMES_IN_FLIGHT);
+	frameResources.resize(MAX_FRAMES_IN_FLIGHT);
 	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
-		frameResoruces[i].commandBuffer = GetCommandBuffer(device, commandPool);
-		frameResoruces[i].syncObjects = GetSyncObjects(device);
+		frameResources[i].commandBuffer = GetCommandBuffer(device, commandPool);
+		frameResources[i].syncObjects = GetSyncObjects(device);
 	}
 }
 
-void CleanupSwapChain(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkImageView> swapChainImageViews, std::vector<VkFramebuffer> framebuffers)
+void CleanupSwapChain(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkImageView> &swapChainImageViews, std::vector<VkFramebuffer> &framebuffers)
 {
 	for(auto &view : swapChainImageViews)
 		vkDestroyImageView(device, view, nullptr);
@@ -1295,11 +1345,11 @@ void GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainK
 
 void Render(VkDevice device, VkSwapchainKHR &swapChain, SyncObjects &syncObjects, uint32_t imageIndex,
 	VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, VkQueue graphicsQueue, 
-	std::vector<VkFramebuffer> &framebuffers, const GpuBuffer&vb, const GpuBuffer&ib)
+	std::vector<VkFramebuffer> &framebuffers, const GraphicsPipelineDetails &pipelineDetails, const GpuBuffer &vb, const GpuBuffer &ib)
 {
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
-	RecordCommandBuffer(cmd, renderPass, graphicsPipeline, framebuffers, vb, ib, imageIndex);
+ 	RecordCommandBuffer(cmd, renderPass, graphicsPipeline, pipelineDetails, framebuffers, vb, ib, imageIndex);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -1348,7 +1398,7 @@ bool LoadObj(std::vector<Vertex> &vertices, const char* path)
 		{
 			fastObjIndex objIndex = obj->indices[indexOffset + j];
 
-			// Trianglulate polygon on the fly; offset - 3 is always the first polygon vertex
+			// Triangulate polygon on the fly; offset - 3 is always the first polygon vertex
 			if (j >= 3)
 			{
 				vertices[vertexOffset + 0] = vertices[vertexOffset - 3];
@@ -1380,7 +1430,7 @@ bool LoadObj(std::vector<Vertex> &vertices, const char* path)
 	return true;
 }
 
-bool LoadMesh(Mesh& mesh, const char* path, bool bNonIndexable = false)
+bool LoadMesh(Mesh& mesh, const char* path, bool bIndexless = false)
 {
 	std::vector<Vertex> triVertices;
 	if (!LoadObj(triVertices, path))
@@ -1388,7 +1438,7 @@ bool LoadMesh(Mesh& mesh, const char* path, bool bNonIndexable = false)
 
 	size_t indexCount = triVertices.size();
 
-	if (bNonIndexable)
+	if (bIndexless)
 	{
 		mesh.vertices = triVertices;
 #if 0
@@ -1427,7 +1477,7 @@ uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, u
 	throw std::runtime_error("Failed to find suitable memory type!");
 }
 
-void GetGpuBuffer(GpuBuffer& result, VkDevice device, const VkPhysicalDeviceMemoryProperties& memProperties, size_t size, VkBufferUsageFlags usage)
+void GetGpuBuffer(GpuBuffer& result, VkDevice device, const VkPhysicalDeviceMemoryProperties& memProperties, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags propertyFlags)
 {
 	VkBufferCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1498,7 +1548,7 @@ int main()
 	volkLoadInstance(instance);
 
 	VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
-	if (g_bEnableVadialtionLayers)
+	if (g_bEnableValidationLayers)
 	{
 		debugMessenger = SetupDebugMessenger(instance);
 		assert(debugMessenger);
@@ -1593,11 +1643,12 @@ int main()
 	GpuBuffer vb{}, ib{};
 	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
 	size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
-	GetGpuBuffer(vb, device, memProperties, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT); // g_BufferSize
+	VkMemoryPropertyFlags memPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	GetGpuBuffer(vb, device, memProperties, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memPropertyFlags); // g_BufferSize
 	memcpy_s(vb.data, vbSize, mesh.vertices.data(), vbSize);
 	if (!mesh.indices.empty())
 	{
-		GetGpuBuffer(ib, device, memProperties, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+		GetGpuBuffer(ib, device, memProperties, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, memPropertyFlags);
 		memcpy_s(ib.data, ibSize, mesh.indices.data(), ibSize);
 	}
 
@@ -1650,7 +1701,7 @@ int main()
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
 		Render(device, swapChain, currentSyncObjects, imageIndex,
-			currentCommandBuffer, pipelineDetails.renderPass, graphicsPipeline, graphicsQueue, framebuffers, vb, ib);
+			currentCommandBuffer, pipelineDetails.renderPass, graphicsPipeline, graphicsQueue, framebuffers, pipelineDetails, vb, ib);
 
 		// Present
 		{
@@ -1705,7 +1756,7 @@ int main()
 	vkDestroyDevice(device, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);
 
-	if (g_bEnableVadialtionLayers)
+	if (g_bEnableValidationLayers)
 		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 	vkDestroyInstance(instance, nullptr);
 
@@ -1722,7 +1773,7 @@ int main()
 * After selecting the right hardware device to use, you need to create a `VkDevice`(logical device), where you describe more specifically
 * which `VkPhysicalDeviceFeatures` you will be using, like multi viewport rendering and 64 bit floats. You also need to specify
 * which queue families you would like to use. Most operations performed with Vulkan, like draw commands and memory operations,
-* are asynchronously executed by submitting them to a `VkQueue`. Queues are allocated from queue familites, where each queue family
+* are asynchronously executed by submitting them to a `VkQueue`. Queues are allocated from queue families, where each queue family
 * supports a specific set of operations in its queues. For example, there could be separate queue families for graphics, compute and
 * memory transfer operations.
 * 
@@ -1754,7 +1805,7 @@ int main()
 * 
 * 7. Command pools and command buffers
 * The drawing operations first need to be recorded into a `VkCommandBuffer` before they can be submitted. These command buffers are
-* allocated from a `VkComomandPool` that is associated with a specific queue family. To draw a simple triangle, we need to 
+* allocated from a `VkCommandPool` that is associated with a specific queue family. To draw a simple triangle, we need to 
 * record a command buffer with the following operations:
 * * Begin the render pass
 * * Bind the graphics pipeline
@@ -1762,7 +1813,7 @@ int main()
 * * End the render pass
 * 
 * 8. Main loop
-* Now that the drawing commands have been wrapped into a comand buffer, the main loop is quite straightforward. We first acquire
+* Now that the drawing commands have been wrapped into a command buffer, the main loop is quite straightforward. We first acquire
 * an image from the swap chain with `vkAcquireNextImageKHR`. We can then select the appropriate command buffer for that image and
 * execute it with `vkQueueSubmit`. Finally, we return the image to the swap chain for presentation to the screen with `vkQueuePresentKHR`.
 */
