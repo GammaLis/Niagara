@@ -9,6 +9,8 @@
 #include <algorithm>	// std::clamp
 #include <fstream>
 
+// Ref: https://developer.nvidia.com/blog/introduction-turing-mesh-shaders/
+
 #define NOMINMAX
 
 #if 1
@@ -48,6 +50,7 @@ using namespace std;
 #define FAST_OBJ_IMPLEMENTATION
 #include "fast_obj.h"
 
+/// Custom settings
 #define DRAW_SIMPLE_TRIANGLE 0
 #define DRAW_SIMPLE_MESH 1
 
@@ -55,6 +58,22 @@ using namespace std;
 
 #define VERTEX_INPUT_MODE 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
+#define USE_MESHLETS 1
+
+
+#define VK_CHECK(call) \
+	do { \
+		VkResult result = call; \
+		assert(result == VK_SUCCESS); \
+	} while (0)
+
+
+/// Declarations
+
+uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
+
+/// Structures
 
 struct Vertex
 {
@@ -116,20 +135,94 @@ struct Vertex
 	}
 };
 
+/**
+* Meshlets
+* Each meshlet represents a varialbe number of vertices and primitives. There are no restrictions regarding the connectivity of
+* these primitives. However, they must stay below a maximum amount, specified within the shader code.
+* We recommend using up to 64 vertices and 126 primitives. The `6` in 126 is not a typo. The first generation hardware allocates
+* primitive indices in 128 byte granularity and needs to reserve 4 bytes for the primitive count. Therefore 3 * 126 + 4 maximizes
+* the fit into a 3 * 128 = 384 bytes block. Going beyond 126 triangles would allocate the next 128 bytes. 84 and 40 are other 
+* maxima that work well for triangles.
+*/
+struct Meshlet
+{
+	uint32_t vertices[64];
+	uint8_t indices[126]; // up to 42 triangels
+	uint8_t vertexCount = 0;
+	uint8_t indexCount = 0;
+};
+
 struct Mesh
 {
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
+	std::vector<Meshlet> meshlets;
 };
 
 struct GpuBuffer
 {
-	VkBuffer buffer;
-	VkDeviceMemory memory;
+	VkBuffer buffer = VK_NULL_HANDLE;
+	VkDeviceMemory memory = VK_NULL_HANDLE;
 	void* data = nullptr;
 	size_t size = 0;
 	uint32_t stride = 0;
 	uint32_t elementCount = 0;
+
+	void Init(VkDevice device, const VkPhysicalDeviceMemoryProperties& memoryProperties, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, void *pInitialData = nullptr)
+	{
+		VkBufferCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		createInfo.size = size;
+		createInfo.usage = usage;
+		createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Optional
+
+		buffer = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateBuffer(device, &createInfo, nullptr, &buffer));
+
+		VkMemoryRequirements memRequirements{};
+		vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = FindMemoryType(memoryProperties, memRequirements.memoryTypeBits, memoryFlags);
+
+		memory = VK_NULL_HANDLE;
+		VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));
+
+		VK_CHECK(vkBindBufferMemory(device, buffer, memory, 0));
+
+		data = nullptr;
+		if (memoryFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+		{
+			vkMapMemory(device, memory, 0, size, 0, &data);
+
+			if (pInitialData != nullptr)
+				memcpy_s(data, size, pInitialData, size);
+		}
+
+		this->size = size;
+	}
+
+	void Destory(VkDevice device)
+	{
+		vkFreeMemory(device, memory, nullptr);
+		vkDestroyBuffer(device, buffer, nullptr);
+	}
+};
+
+struct BufferManager 
+{
+	GpuBuffer vertexBuffer;
+	GpuBuffer indexBuffer;
+	GpuBuffer meshletBuffer;
+
+	void Cleanup(VkDevice device)
+	{
+		vertexBuffer.Destory(device);
+		indexBuffer.Destory(device);
+		meshletBuffer.Destory(device);
+	}
 };
 
 
@@ -171,15 +264,12 @@ struct GpuBuffer
 * Almost all functions return a `VkResult` that is either `VK_SUCCESS` or an error code.
 */
 
-#define VK_CHECK(call) \
-	do { \
-		VkResult result = call; \
-		assert(result == VK_SUCCESS); \
-	} while (0)
-
+/// Global variables
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+
+const std::string g_ResourcePath = "../Resources/";
 
 bool g_FramebufferResized = false;
 GLFWwindow* g_Window = nullptr;
@@ -216,6 +306,11 @@ const std::vector<const char*> g_DeviceExtensions =
 	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
 	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
+
+#if USE_MESHLETS
+	VK_NV_MESH_SHADER_EXTENSION_NAME
+#endif
+
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -656,7 +751,13 @@ VkDevice GetLogicalDevice(VkPhysicalDevice physicalDevice, const QueueFamilyIndi
 	createInfo.enabledExtensionCount = static_cast<uint32_t>(g_DeviceExtensions.size());
 	// The `enabledLayerCount` and `ppEnabledLayerNames` fields of `VkDeviceCreateInfo` are ignored by up-to-date implementations.
 
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS || USE_MESHLETS
+	// Specifying used device features
+	VkPhysicalDeviceFeatures2 deviceFeatures{};
+	deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+	void** pNext = &deviceFeatures.pNext;
+
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS 
 	VkPhysicalDevice8BitStorageFeatures features8Bit{};
 	features8Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
 	features8Bit.storageBuffer8BitAccess = true;
@@ -665,12 +766,18 @@ VkDevice GetLogicalDevice(VkPhysicalDevice physicalDevice, const QueueFamilyIndi
 	features16Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
 	features16Bit.storageBuffer16BitAccess = true;
 
-	// Specifying used device features
-	VkPhysicalDeviceFeatures2 deviceFeatures{};
-	deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-
-	deviceFeatures.pNext = &features16Bit;
+	*pNext = &features16Bit;
 	features16Bit.pNext = &features8Bit;
+	pNext = &features8Bit.pNext;
+#endif
+
+#if USE_MESHLETS
+	VkPhysicalDeviceMeshShaderFeaturesNV featureMeshShader{};
+	featureMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV;
+	featureMeshShader.meshShader = true;
+
+	*pNext = &featureMeshShader;
+#endif	
 
 	createInfo.pNext = &deviceFeatures;
 
@@ -924,49 +1031,66 @@ VkRenderPass GetRenderPass(VkDevice device)
 struct GraphicsPipelineDetails
 {
 	VkShaderModule vertexShader;
+	VkShaderModule meshShader;
+	VkShaderModule taskShader;
 	VkShaderModule fragmentShader;
 
 	VkRenderPass renderPass;
 	VkPipelineLayout layout;
+	VkPipeline pipeline;
 
 	std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
 
 	void Cleanup(VkDevice device)
 	{
 		vkDestroyShaderModule(device, vertexShader, nullptr);
+		vkDestroyShaderModule(device, taskShader, nullptr);
+		vkDestroyShaderModule(device, meshShader, nullptr);
 		vkDestroyShaderModule(device, fragmentShader, nullptr);
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyPipelineLayout(device, layout, nullptr);
 		for (const auto &setLayout : descriptorSetLayouts)
 			vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+		vkDestroyPipeline(device, pipeline, nullptr);
 	}
 };
-VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkRenderPass renderPass, VkExtent2D viewportExtent)
+VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkExtent2D viewportExtent)
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
+#if USE_MESHLETS
+	auto meshShader = ReadFile("./CompiledShaders/SimpleMesh.mesh.spv");
+	pipeline.meshShader = GetShaderModule(device, meshShader);
+#else
 	auto vertShader = ReadFile("./CompiledShaders/SimpleMesh.vert.spv");
+	pipeline.vertexShader = GetShaderModule(device, vertShader);
+#endif
 	auto fragShader = ReadFile("./CompiledShaders/SimpleMesh.frag.spv");
+
 #else
 	auto vertShader = ReadFile("./CompiledShaders/SimpleTriangle.vert.spv");
 	auto fragShader = ReadFile("./CompiledShaders/SimpleTriangle.frag.spv");
 #endif
-
-	pipeline.vertexShader = GetShaderModule(device, vertShader);
+	
 	pipeline.fragmentShader = GetShaderModule(device, fragShader);
 
-	VkPipelineShaderStageCreateInfo vsStageCreateInfo{};
-	vsStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	vsStageCreateInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-	vsStageCreateInfo.module = pipeline.vertexShader;
-	vsStageCreateInfo.pName = "main";
+	VkPipelineShaderStageCreateInfo shaderStages[2] = {};
 
-	VkPipelineShaderStageCreateInfo fsStageCreateInfo{};
-	fsStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	fsStageCreateInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-	fsStageCreateInfo.module = pipeline.fragmentShader;
-	fsStageCreateInfo.pName = "main";
+	// Fragment shader
+	shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	shaderStages[0].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	shaderStages[0].module = pipeline.fragmentShader;
+	shaderStages[0].pName = "main";
 
-	VkPipelineShaderStageCreateInfo shaderStages[] = { vsStageCreateInfo, fsStageCreateInfo };
+	// Vertex shader / mesh shader
+	shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	shaderStages[1].pName = "main";
+#if USE_MESHLETS
+	shaderStages[1].stage = VK_SHADER_STAGE_MESH_BIT_NV;
+	shaderStages[1].module = pipeline.meshShader;
+#else
+	shaderStages[1].stage = VK_SHADER_STAGE_VERTEX_BIT;
+	shaderStages[1].module = pipeline.vertexShader;
+#endif
 
 	// Dynamic state
 	// When opting for dynamic viewport(s) and scissor rectangle(s) you need to enable the respective dynamic states for the pipeline
@@ -1069,14 +1193,28 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	colorBlending.blendConstants[3] = 0.0f; // Optional
 
 	// Render pass
-	pipeline.renderPass = renderPass;
+	auto renderPass = pipeline.renderPass;
 
 	// Pipeline layout
+#if USE_MESHLETS
+	VkDescriptorSetLayoutBinding setBinding[2] = {};
+	setBinding[0].binding = 0;
+	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	setBinding[0].descriptorCount = 1;
+	setBinding[0].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
+
+	setBinding[1].binding = 1;
+	setBinding[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	setBinding[1].descriptorCount = 1;
+	setBinding[1].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
+
+#else
 	VkDescriptorSetLayoutBinding setBinding[1] = {};
 	setBinding[0].binding = 0;
 	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	setBinding[0].descriptorCount = 1;
 	setBinding[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+#endif
 
 	VkDescriptorSetLayoutCreateInfo setCreateInfo{};
 	setCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1186,8 +1324,8 @@ VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool)
 	return commandBuffer;
 }
 
-void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, const GraphicsPipelineDetails &pipelineDetails,
-	const std::vector<VkFramebuffer> &framebuffers, const GpuBuffer&vb, const GpuBuffer&ib, uint32_t imageIndex)
+void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pipelineDetails,
+	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh)
 {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1199,7 +1337,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipelin
 	// Starting a render pass
 	VkRenderPassBeginInfo renderPassInfo{};
 	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	renderPassInfo.renderPass = renderPass;
+	renderPassInfo.renderPass = pipelineDetails.renderPass;
 	renderPassInfo.framebuffer = framebuffers[imageIndex];
 
 	renderPassInfo.renderArea.offset = {0, 0};
@@ -1213,29 +1351,61 @@ void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipelin
 	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	// Basic drawing commands
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.pipeline);
+
+	const auto& vb = bufferMgr.vertexBuffer;
+	const auto& ib = bufferMgr.indexBuffer;
 
 #if VERTEX_INPUT_MODE == 1
-	VkDescriptorBufferInfo descBufferInfo{};
-	descBufferInfo.buffer = vb.buffer;
-	descBufferInfo.offset = 0;
-	descBufferInfo.range = vb.size;
 
+	VkDescriptorBufferInfo vertexBufferInfo{};
+	vertexBufferInfo.buffer = vb.buffer;
+	vertexBufferInfo.offset = 0;
+	vertexBufferInfo.range = vb.size;
+
+#if USE_MESHLETS
+	const auto& mb = bufferMgr.meshletBuffer;
+
+	VkDescriptorBufferInfo meshletBufferInfo{};
+	meshletBufferInfo.buffer = mb.buffer;
+	meshletBufferInfo.offset = 0;
+	meshletBufferInfo.range = mb.size;
+
+	VkWriteDescriptorSet writeDescriptors[2] = {};
+
+	writeDescriptors[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writeDescriptors[0].dstBinding = 0;
+	writeDescriptors[0].descriptorCount = 1;
+	writeDescriptors[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writeDescriptors[0].pBufferInfo = &vertexBufferInfo;
+
+	writeDescriptors[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writeDescriptors[1].dstBinding = 1;
+	writeDescriptors[1].descriptorCount = 1;
+	writeDescriptors[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writeDescriptors[1].pBufferInfo = &meshletBufferInfo;
+
+#else
 	VkWriteDescriptorSet writeDescriptors[1] = {};
 	writeDescriptors[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 	writeDescriptors[0].dstBinding = 0;
 	writeDescriptors[0].descriptorCount = 1;
 	writeDescriptors[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	writeDescriptors[0].pBufferInfo = &descBufferInfo;
+	writeDescriptors[0].pBufferInfo = &vertexBufferInfo;
+
+	if (ib.size > 0)
+		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+#endif
 
 	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.layout, 0, ARRAYSIZE(writeDescriptors), writeDescriptors);
 	
 #else
 	VkDeviceSize offset = 0;
 	vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
-#endif
+
 	if (ib.size > 0)
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+#endif	
 
 	VkViewport viewport{};
 #if 1
@@ -1260,12 +1430,20 @@ void RecordCommandBuffer(VkCommandBuffer cmd, VkRenderPass renderPass, VkPipelin
 	vkCmdSetScissor(cmd, 0, 1, &scissor);
 
 #if DRAW_MODE == DRAW_SIMPLE_MESH
+
+#if USE_MESHLETS
+	uint32_t taskCount = static_cast<uint32_t>(mesh.meshlets.size());
+	vkCmdDrawMeshTasksNV(cmd, taskCount, 0);
+		
+#else
 	uint32_t vertexCount = static_cast<uint32_t>(vb.size / sizeof(Vertex));
 	uint32_t indexCount = static_cast<uint32_t>(ib.size / sizeof(uint32_t));
 	if (ib.size > 0)
 		vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
 	else
 		vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+#endif
+
 #else
 	vkCmdDraw(cmd, 3, 1, 0, 0);
 #endif
@@ -1370,14 +1548,28 @@ void GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainK
 	assert(!framebuffers.empty());
 }
 
+VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
+{
+	VkQueryPoolCreateInfo createInfo{};
+	createInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+	createInfo.queryCount = queryCount;
+	createInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+	// createInfo.pipelineStatistics = VkQueryPipelineStatisticFlagBits::
+
+	VkQueryPool queryPool;
+	VK_CHECK(vkCreateQueryPool(device, &createInfo, nullptr, &queryPool));
+
+	return queryPool;
+}
+
 
 void Render(VkDevice device, VkSwapchainKHR &swapChain, SyncObjects &syncObjects, uint32_t imageIndex,
-	VkCommandBuffer cmd, VkRenderPass renderPass, VkPipeline graphicsPipeline, VkQueue graphicsQueue, 
-	std::vector<VkFramebuffer> &framebuffers, const GraphicsPipelineDetails &pipelineDetails, const GpuBuffer &vb, const GpuBuffer &ib)
+	VkCommandBuffer cmd, const GraphicsPipelineDetails& pipelineDetails, VkQueue graphicsQueue,
+	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh)
 {
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
- 	RecordCommandBuffer(cmd, renderPass, graphicsPipeline, pipelineDetails, framebuffers, vb, ib, imageIndex);
+ 	RecordCommandBuffer(cmd, pipelineDetails, framebuffers, bufferMgr, imageIndex, mesh);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -1500,6 +1692,56 @@ bool LoadMesh(Mesh& mesh, const char* path, bool bIndexless = false)
 
 	// TODO: optimize the mesh for more efficient GPU rendering
 	return true;
+}
+
+void BuildMeshlets(Mesh& mesh)
+{
+	std::vector<Meshlet> meshlets;
+	Meshlet meshlet{};
+	std::vector<uint8_t> meshletVertices(mesh.vertices.size(), 0xFF);
+	uint8_t indexOffset = 0, vertexOffset = 0;
+	for (size_t i = 0; i < mesh.indices.size(); i += 3)
+	{
+		uint32_t i0 = mesh.indices[i];
+		uint32_t i1 = mesh.indices[i+1];
+		uint32_t i2 = mesh.indices[i+2];
+
+		uint8_t &v0 = meshletVertices[i0];
+		uint8_t &v1 = meshletVertices[i1];
+		uint8_t &v2 = meshletVertices[i2];
+
+		if (meshlet.vertexCount + (v0 == 0xFF) + (v1 == 0xFF) + (v2 == 0xFF) > 64 ||
+			meshlet.indexCount + 3 > 126)
+		{
+			mesh.meshlets.push_back(meshlet);
+			for (uint8_t mv = 0; mv < meshlet.vertexCount; ++mv)
+				meshletVertices[meshlet.vertices[mv]] = 0xFF;
+			meshlet = {};
+		}
+
+		if (v0 == 0xFF)
+		{
+			v0 = meshlet.vertexCount;
+			meshlet.vertices[meshlet.vertexCount++] = i0;
+		}
+		if (v1 == 0xFF)
+		{
+			v1 = meshlet.vertexCount;
+			meshlet.vertices[meshlet.vertexCount++] = i1;
+		}
+		if (v2 == 0xFF)
+		{
+			v2 = meshlet.vertexCount;
+			meshlet.vertices[meshlet.vertexCount++] = i2;
+		}
+
+		meshlet.indices[meshlet.indexCount++] = v0;
+		meshlet.indices[meshlet.indexCount++] = v1;
+		meshlet.indices[meshlet.indexCount++] = v2;
+	}
+
+	if (meshlet.indexCount > 0)
+		mesh.meshlets.push_back(meshlet);
 }
 
 uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties)
@@ -1627,6 +1869,7 @@ int main()
 
 	// Need swap chain surface format
 	VkRenderPass renderPass = GetRenderPass(device);
+	assert(renderPass);
 
 	VkSwapchainKHR swapChain = VK_NULL_HANDLE;
 	std::vector<VkImage> swapChainImages;
@@ -1655,7 +1898,10 @@ int main()
 
 	// Pipeline
 	GraphicsPipelineDetails pipelineDetails{};
-	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, renderPass, swapChainInfo.extent);
+	pipelineDetails.renderPass = renderPass;
+	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, swapChainInfo.extent);
+	assert(graphicsPipeline);
+	pipelineDetails.pipeline = graphicsPipeline;
 
 	// Command buffers
 	VkCommandPool commandPool = GetCommandPool(device, indices);
@@ -1672,23 +1918,57 @@ int main()
 	std::vector<FrameResources> frameResources;
 	GetFrameResources(device, frameResources, commandPool);
 
+	VkQueryPool queryPool = GetQueryPool(device, 128);
+	assert(queryPool);
+
 	// Mesh
 	Mesh mesh{};
-	LoadMesh(mesh, "../Resources/kitten.obj");
+	
+	const std::string fileName{ "kitten.obj" };
+	bool bLoaded = LoadMesh(mesh, std::string(g_ResourcePath + fileName).data());
+	if (!bLoaded)
+	{
+		std::cout << "Load mesh failed: " << fileName << std::endl;
+		return -1;
+	}
 
-	GpuBuffer vb{}, ib{};
-	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
-	size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
+#if USE_MESHLETS
+	// Meshlets
+	BuildMeshlets(mesh);
+#endif
+
 	VkMemoryPropertyFlags memPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+	BufferManager bufferMgr{};
+	GpuBuffer &vb = bufferMgr.vertexBuffer, &ib = bufferMgr.indexBuffer;
+	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
+
+#if 1
+	vb.Init(device, memProperties, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memPropertyFlags, mesh.vertices.data());
+	if (!mesh.indices.empty())
+	{
+		size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
+		ib.Init(device, memProperties, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, memPropertyFlags, mesh.indices.data());
+	}
+#if USE_MESHLETS
+	GpuBuffer& meshletBuffer = bufferMgr.meshletBuffer;
+	size_t mbSize = mesh.meshlets.size() * sizeof(Meshlet);
+	meshletBuffer.Init(device, memProperties, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memPropertyFlags, mesh.meshlets.data());
+#endif
+
+#else
 	GetGpuBuffer(vb, device, memProperties, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memPropertyFlags); // g_BufferSize
 	memcpy_s(vb.data, vbSize, mesh.vertices.data(), vbSize);
 	if (!mesh.indices.empty())
 	{
+		size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
 		GetGpuBuffer(ib, device, memProperties, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, memPropertyFlags);
 		memcpy_s(ib.data, ibSize, mesh.indices.data(), ibSize);
 	}
+#endif
 
 	uint32_t currentFrame = 0;
+	double currentFrameTime = glfwGetTime() * 1000.0;
 
 	// SPACE
 
@@ -1737,7 +2017,7 @@ int main()
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
 		Render(device, swapChain, currentSyncObjects, imageIndex,
-			currentCommandBuffer, pipelineDetails.renderPass, graphicsPipeline, graphicsQueue, framebuffers, pipelineDetails, vb, ib);
+			currentCommandBuffer, pipelineDetails, graphicsQueue, framebuffers, bufferMgr, mesh);
 
 		// Present
 		{
@@ -1761,6 +2041,14 @@ int main()
 		}
 
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+
+		double frameEndTime = glfwGetTime() * 1000.0;
+		double deltaTime = frameEndTime - currentFrameTime;
+		currentFrameTime = frameEndTime;
+
+		char title[256];
+		sprintf_s(title, "Cpu %.1f ms, Gpu %.1f ms", deltaTime, 0.f);
+		glfwSetWindowTitle(window, title);
 	}
 
 	// Wait for the logical device to finish operations before exiting main loop and destroying the window
@@ -1773,8 +2061,14 @@ int main()
 
 	// Clean up Vulkan
 
+	vkDestroyQueryPool(device, queryPool, nullptr);
+
+#if 1
+	bufferMgr.Cleanup(device);
+#else
 	DestroyBuffer(device, vb);
 	DestroyBuffer(device, ib);
+#endif
 
 	for (auto &frameResource : frameResources)
 	{
@@ -1786,8 +2080,8 @@ int main()
 	
 	vkDestroyCommandPool(device, commandPool, nullptr);
 	
+	// Pipeline
 	pipelineDetails.Cleanup(device);
-	vkDestroyPipeline(device, graphicsPipeline, nullptr);
 
 	vkDestroyDevice(device, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);

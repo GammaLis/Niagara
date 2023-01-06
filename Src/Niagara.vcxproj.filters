@@ -181,5 +181,8 @@
     <CustomBuild Include="..\Shaders\SimpleMesh.vert.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
   </ItemGroup>
 </Project>
