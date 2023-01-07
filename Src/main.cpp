@@ -59,6 +59,7 @@ using namespace std;
 #define VERTEX_INPUT_MODE 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_MESHLETS 1
+// Mesh shader needs the 8bit_16bit_extension
 
 
 #define VK_CHECK(call) \
@@ -68,22 +69,113 @@ using namespace std;
 	} while (0)
 
 
+/// Global variables
+
+constexpr uint32_t WIDTH = 800;
+constexpr uint32_t HEIGHT = 600;
+
+constexpr uint32_t MESHLET_MAX_VERTICES = 64;
+constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
+
+const std::string g_ResourcePath = "../Resources/";
+
+bool g_FramebufferResized = false;
+GLFWwindow* g_Window = nullptr;
+
+// Window
+static void FramebufferResizeCallback(GLFWwindow * window, int width, int height)
+{
+	g_FramebufferResized = true;
+}
+
+
+// Vulkan
+#ifdef NDEBUG
+const bool g_bEnableValidationLayers = false;
+#else
+const bool g_bEnableValidationLayers = true;
+#endif
+
+VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
+VkDevice g_Device = VK_NULL_HANDLE;
+
+VkCommandPool g_CommandPool = VK_NULL_HANDLE;
+
+// How many frames 
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+// We choose the number of 2 because we don't want the CPU to get too far ahead of the GPU. With 2 frames in flight, the CPU and GPU
+// can be working on their own tasks at the same time. If the CPU finishes early, it will wait till the GPU finishes rendering before
+// submitting more work.
+// Each frame should have its own command buffer, set of semaphores, and fence.
+
+static const uint32_t g_BufferSize = 128 * 1024 * 1024;
+
+const std::vector<const char*> g_DeviceExtensions =
+{
+	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
+	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
+
+#if USE_MESHLETS
+	VK_NV_MESH_SHADER_EXTENSION_NAME
+#endif
+
+};
+
+std::vector<VkDynamicState> g_DynamicStates =
+{
+	VK_DYNAMIC_STATE_VIEWPORT,
+	VK_DYNAMIC_STATE_SCISSOR
+};
+
+VkFormat g_Format;
+VkExtent2D g_ViewportExtent;
+
+
 /// Declarations
 
 uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties);
+VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool);
+
 
 
 /// Structures
 
+/// Graphics
+namespace Niagara
+{
+	class Graphics
+	{
+	public:
+		VkInstance instance;
+		VkPhysicalDevice physicalDevice;
+		VkDevice device;
+		VkPhysicalDeviceMemoryProperties deviceMemoryProperties;
+		VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+
+		VkQueue graphicsQueue;
+		VkQueue commandQueue;
+		VkQueue presentQueue;
+
+		VkCommandPool commandPool;
+
+		// TODO...
+		// void Init(GLFWwindow* window, const std::vector<const char*>& extensions);
+	};
+}
+
 struct Vertex
 {
-	glm::vec3 p;
 #if USE_DEVICE_8BIT_16BIT_EXTENSIONS
+	glm::u16vec3 p;
 	glm::u8vec4 n;
+	glm::u16vec2 uv;
 #else
+	glm::vec3 p;
 	glm::vec3 n;
-#endif
 	glm::vec2 uv;
+#endif
 
 	static VkVertexInputBindingDescription GetBindingDescription()
 	{
@@ -113,6 +205,26 @@ struct Vertex
 
 		uint32_t vertexAttribOffset = 0;
 
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
+		attributeDescs[0].binding = 0;
+		attributeDescs[0].format = VK_FORMAT_R16G16B16_SFLOAT;
+		attributeDescs[0].location = 0;
+		attributeDescs[0].offset = offsetof(Vertex, p); // vertexAttribOffset 
+		vertexAttribOffset += 3 * 2;
+
+		attributeDescs[1].binding = 0;
+		attributeDescs[1].format = VK_FORMAT_R8G8B8A8_UINT;
+		attributeDescs[1].location = 1;
+		attributeDescs[1].offset = offsetof(Vertex, n); // vertexAttribOffset;
+		vertexAttribOffset += 4;
+
+		attributeDescs[2].binding = 0;
+		attributeDescs[2].format = VK_FORMAT_R16G16_SFLOAT;
+		attributeDescs[2].location = 2;
+		attributeDescs[2].offset = offsetof(Vertex, uv); // vertexAttribOffset;
+		vertexAttribOffset += 2 * 2;
+
+#else
 		attributeDescs[0].binding = 0;
 		attributeDescs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescs[0].location = 0;
@@ -130,6 +242,7 @@ struct Vertex
 		attributeDescs[2].location = 2;
 		attributeDescs[2].offset = offsetof(Vertex, uv); // vertexAttribOffset;
 		vertexAttribOffset += 2 * 4;
+#endif
 
 		return attributeDescs;
 	}
@@ -137,7 +250,7 @@ struct Vertex
 
 /**
 * Meshlets
-* Each meshlet represents a varialbe number of vertices and primitives. There are no restrictions regarding the connectivity of
+* Each meshlet represents a variable number of vertices and primitives. There are no restrictions regarding the connectivity of
 * these primitives. However, they must stay below a maximum amount, specified within the shader code.
 * We recommend using up to 64 vertices and 126 primitives. The `6` in 126 is not a typo. The first generation hardware allocates
 * primitive indices in 128 byte granularity and needs to reserve 4 bytes for the primitive count. Therefore 3 * 126 + 4 maximizes
@@ -146,10 +259,10 @@ struct Vertex
 */
 struct Meshlet
 {
-	uint32_t vertices[64];
-	uint8_t indices[126]; // up to 42 triangels
+	uint32_t vertices[MESHLET_MAX_VERTICES];
+	uint8_t indices[MESHLET_MAX_PRIMITIVES*3]; // up to MESHLET_MAX_PRIMITIVES triangles
 	uint8_t vertexCount = 0;
-	uint8_t indexCount = 0;
+	uint8_t triangleCount = 0;
 };
 
 struct Mesh
@@ -168,8 +281,42 @@ struct GpuBuffer
 	uint32_t stride = 0;
 	uint32_t elementCount = 0;
 
-	void Init(VkDevice device, const VkPhysicalDeviceMemoryProperties& memoryProperties, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, void *pInitialData = nullptr)
+	static void Copy(Niagara::Graphics& gfx, GpuBuffer &dstBuffer, const GpuBuffer &srcBuffer, VkDeviceSize size)
 	{
+		VkCommandBuffer cmd = GetCommandBuffer(gfx.device, gfx.commandPool);
+
+		VkCommandBufferBeginInfo cmdBeginInfo{};
+		cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+
+		VkBufferCopy copyRegion{};
+		copyRegion.srcOffset = 0;
+		copyRegion.dstOffset = 0;
+		copyRegion.size = size;
+		vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1, &copyRegion);
+
+		VK_CHECK(vkEndCommandBuffer(cmd));
+
+		VkSubmitInfo submitInfo{};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &cmd;
+
+		vkQueueSubmit(gfx.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		// Unlike the draw commands, there are no events we need to wait on this time. We just want to execute the transfer on the buffers immediately.
+		// We could use a fence and wait with `vkWaitForFences`, or simply wait for the transfer queue to become idle with `vkQueueWaitIdle`. A fence would allow
+		// you to schedule multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time. That may give
+		// the driver more opportunities to optimize.
+		vkQueueWaitIdle(gfx.graphicsQueue);
+
+		vkFreeCommandBuffers(gfx.device, gfx.commandPool, 1, &cmd);
+	}
+
+	void Init(Niagara::Graphics &gfx, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
+	{
+		VkDevice device = gfx.device;
+
 		VkBufferCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		createInfo.size = size;
@@ -185,7 +332,7 @@ struct GpuBuffer
 		VkMemoryAllocateInfo allocInfo{};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = FindMemoryType(memoryProperties, memRequirements.memoryTypeBits, memoryFlags);
+		allocInfo.memoryTypeIndex = FindMemoryType(gfx.deviceMemoryProperties, memRequirements.memoryTypeBits, memoryFlags);
 
 		memory = VK_NULL_HANDLE;
 		VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));
@@ -196,13 +343,33 @@ struct GpuBuffer
 		if (memoryFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
 		{
 			vkMapMemory(device, memory, 0, size, 0, &data);
-
-			if (pInitialData != nullptr)
-				memcpy_s(data, size, pInitialData, size);
 		}
 
 		this->size = size;
+
+		if (pInitialData != nullptr)
+			Update(gfx, pInitialData, size);
 	}
+
+	void Update(Niagara::Graphics &gfx, const void *pData, size_t size)
+	{
+		if (buffer == VK_NULL_HANDLE || pData == nullptr) 
+			return;
+
+		if (data != nullptr)
+		{
+			memcpy_s(data, size, pData, size);
+		}
+		else
+		{
+			GpuBuffer scratchBuffer{};
+			scratchBuffer.Init(gfx, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, pData);
+
+			Copy(gfx, *this, scratchBuffer, size);
+
+			scratchBuffer.Destory(gfx.device);
+		}
+	}	
 
 	void Destory(VkDevice device)
 	{
@@ -263,64 +430,6 @@ struct BufferManager
 * can point to an extension structure and will always be `nullptr` in this tutorial.
 * Almost all functions return a `VkResult` that is either `VK_SUCCESS` or an error code.
 */
-
-/// Global variables
-
-constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
-
-const std::string g_ResourcePath = "../Resources/";
-
-bool g_FramebufferResized = false;
-GLFWwindow* g_Window = nullptr;
-
-/// Window
-static void FramebufferResizeCallback(GLFWwindow * window, int width, int height)
-{
-	g_FramebufferResized = true;
-}
-
-
-/// Vulkan
-#ifdef NDEBUG
-const bool g_bEnableValidationLayers = false;
-#else
-const bool g_bEnableValidationLayers = true;
-#endif
-
-VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
-VkDevice g_Device = VK_NULL_HANDLE;
-
-// How many frames 
-constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
-// We choose the number of 2 because we don't want the CPU to get too far ahead of the GPU. With 2 frames in flight, the CPU and GPU
-// can be working on their own tasks at the same time. If the CPU finishes early, it will wait till the GPU finishes rendering before
-// submitting more work.
-// Each frame should have its own command buffer, set of semaphores, and fence.
-
-static const uint32_t g_BufferSize = 128 * 1024 * 1024;
-
-const std::vector<const char*> g_DeviceExtensions =
-{
-	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
-
-#if USE_MESHLETS
-	VK_NV_MESH_SHADER_EXTENSION_NAME
-#endif
-
-};
-
-std::vector<VkDynamicState> g_DynamicStates =
-{
-	VK_DYNAMIC_STATE_VIEWPORT,
-	VK_DYNAMIC_STATE_SCISSOR
-};
-
-VkFormat g_Format;
-VkExtent2D g_ViewportExtent;
 
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT * pCreateInfo, const VkAllocationCallbacks * pAllocator, VkDebugUtilsMessengerEXT * pDebugMessenger)
 {
@@ -1208,7 +1317,7 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	setBinding[1].descriptorCount = 1;
 	setBinding[1].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
 
-#else
+#elif VERTEX_INPUT_MODE
 	VkDescriptorSetLayoutBinding setBinding[1] = {};
 	setBinding[0].binding = 0;
 	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1218,9 +1327,11 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 
 	VkDescriptorSetLayoutCreateInfo setCreateInfo{};
 	setCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+#if USE_MESHLETS || VERTEX_INPUT_MODE
 	setCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
 	setCreateInfo.bindingCount = ARRAYSIZE(setBinding);
 	setCreateInfo.pBindings = setBinding;
+#endif
 
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VK_CHECK(vkCreateDescriptorSetLayout(device, &setCreateInfo, nullptr, &setLayout));
@@ -1563,6 +1674,8 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 }
 
 
+/// Main
+
 void Render(VkDevice device, VkSwapchainKHR &swapChain, SyncObjects &syncObjects, uint32_t imageIndex,
 	VkCommandBuffer cmd, const GraphicsPipelineDetails& pipelineDetails, VkQueue graphicsQueue,
 	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh)
@@ -1627,25 +1740,32 @@ bool LoadObj(std::vector<Vertex> &vertices, const char* path)
 			}
 
 			Vertex& v = vertices[vertexOffset++];
-			// P
-			v.p.x = obj->positions[objIndex.p * 3 + 0];
-			v.p.y = obj->positions[objIndex.p * 3 + 1];
-			v.p.z = obj->positions[objIndex.p * 3 + 2];
-
+			
 #if USE_DEVICE_8BIT_16BIT_EXTENSIONS
+			// P
+			v.p.x = meshopt_quantizeHalf(obj->positions[objIndex.p * 3 + 0]);
+			v.p.y = meshopt_quantizeHalf(obj->positions[objIndex.p * 3 + 1]);
+			v.p.z = meshopt_quantizeHalf(obj->positions[objIndex.p * 3 + 2]);
 			// N
 			v.n.x = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 0] * 127.f + 127.5f);
 			v.n.y = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 1] * 127.f + 127.5f);
 			v.n.z = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 2] * 127.f + 127.5f);
+			// UV
+			v.uv.x = meshopt_quantizeHalf(obj->texcoords[objIndex.t * 2 + 0]);
+			v.uv.y = meshopt_quantizeHalf(obj->texcoords[objIndex.t * 2 + 1]);
 #else
+			// P
+			v.p.x = obj->positions[objIndex.p * 3 + 0];
+			v.p.y = obj->positions[objIndex.p * 3 + 1];
+			v.p.z = obj->positions[objIndex.p * 3 + 2];
 			// N
 			v.n.x = obj->normals[objIndex.n * 3 + 0];
 			v.n.y = obj->normals[objIndex.n * 3 + 1];
 			v.n.z = obj->normals[objIndex.n * 3 + 2];
-#endif
 			// UV
 			v.uv.x = obj->texcoords[objIndex.t * 2 + 0];
 			v.uv.y = obj->texcoords[objIndex.t * 2 + 1];
+#endif
 		}
 
 		indexOffset += obj->face_vertices[i];
@@ -1686,6 +1806,9 @@ bool LoadMesh(Mesh& mesh, const char* path, bool bIndexless = false)
 		meshopt_remapVertexBuffer(vertices.data(), triVertices.data(), indexCount, sizeof(Vertex), remap.data());
 		meshopt_remapIndexBuffer(indices.data(), nullptr, indexCount, remap.data());
 
+		meshopt_optimizeVertexCache(indices.data(), indices.data(), indexCount, vertexCount);
+		meshopt_optimizeVertexFetch(vertices.data(), indices.data(), indexCount, vertices.data(), vertexCount, sizeof(Vertex));
+
 		mesh.vertices.insert(mesh.vertices.end(), vertices.begin(), vertices.end());
 		mesh.indices.insert(mesh.indices.end(), indices.begin(), indices.end());
 	}
@@ -1710,8 +1833,8 @@ void BuildMeshlets(Mesh& mesh)
 		uint8_t &v1 = meshletVertices[i1];
 		uint8_t &v2 = meshletVertices[i2];
 
-		if (meshlet.vertexCount + (v0 == 0xFF) + (v1 == 0xFF) + (v2 == 0xFF) > 64 ||
-			meshlet.indexCount + 3 > 126)
+		if (meshlet.vertexCount + (v0 == 0xFF) + (v1 == 0xFF) + (v2 == 0xFF) > MESHLET_MAX_VERTICES ||
+			meshlet.triangleCount >= MESHLET_MAX_PRIMITIVES)
 		{
 			mesh.meshlets.push_back(meshlet);
 			for (uint8_t mv = 0; mv < meshlet.vertexCount; ++mv)
@@ -1735,12 +1858,13 @@ void BuildMeshlets(Mesh& mesh)
 			meshlet.vertices[meshlet.vertexCount++] = i2;
 		}
 
-		meshlet.indices[meshlet.indexCount++] = v0;
-		meshlet.indices[meshlet.indexCount++] = v1;
-		meshlet.indices[meshlet.indexCount++] = v2;
+		meshlet.indices[meshlet.triangleCount * 3 + 0] = v0;
+		meshlet.indices[meshlet.triangleCount * 3 + 1] = v1;
+		meshlet.indices[meshlet.triangleCount * 3 + 2] = v2;
+		meshlet.triangleCount++;
 	}
 
-	if (meshlet.indexCount > 0)
+	if (meshlet.triangleCount > 0)
 		mesh.meshlets.push_back(meshlet);
 }
 
@@ -1906,6 +2030,18 @@ int main()
 	// Command buffers
 	VkCommandPool commandPool = GetCommandPool(device, indices);
 	assert(commandPool);
+	g_CommandPool = commandPool;
+
+	// Graphics
+	Niagara::Graphics gfx{};
+	gfx.instance = instance;
+	gfx.physicalDevice = physicalDevice;
+	gfx.device = device;
+	gfx.debugMessenger = debugMessenger;
+	gfx.commandPool = commandPool;
+	gfx.deviceMemoryProperties = memProperties;
+	gfx.graphicsQueue = graphicsQueue;
+	gfx.presentQueue = presentQueue;
 
 	VkCommandBuffer commandBuffer = GetCommandBuffer(device, commandPool);
 	assert(commandBuffer);
@@ -1937,23 +2073,24 @@ int main()
 	BuildMeshlets(mesh);
 #endif
 
-	VkMemoryPropertyFlags memPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	VkMemoryPropertyFlags hostVisibleMemPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	VkMemoryPropertyFlags deviceLocalMemPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
 	BufferManager bufferMgr{};
 	GpuBuffer &vb = bufferMgr.vertexBuffer, &ib = bufferMgr.indexBuffer;
 	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
 
 #if 1
-	vb.Init(device, memProperties, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memPropertyFlags, mesh.vertices.data());
+	vb.Init(gfx, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
 	if (!mesh.indices.empty())
 	{
 		size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
-		ib.Init(device, memProperties, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, memPropertyFlags, mesh.indices.data());
+		ib.Init(gfx, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
 	}
 #if USE_MESHLETS
 	GpuBuffer& meshletBuffer = bufferMgr.meshletBuffer;
 	size_t mbSize = mesh.meshlets.size() * sizeof(Meshlet);
-	meshletBuffer.Init(device, memProperties, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memPropertyFlags, mesh.meshlets.data());
+	meshletBuffer.Init(gfx, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
 #endif
 
 #else

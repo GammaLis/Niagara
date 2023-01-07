@@ -1,24 +1,41 @@
 #version 450 core
 
+#define USE_8BIT_16BIT_EXTENSIONS 1
+#define USE_PER_PRIMITIVE 0
+
 #extension GL_EXT_shader_16bit_storage  : require
+// #define GL_EXT_mesh_shader 1
+
+#if USE_8BIT_16BIT_EXTENSIONS
+#extension GL_NV_mesh_shader	: require
 #extension GL_EXT_shader_8bit_storage   : require
 #extension GL_EXT_shader_explicit_arithmetic_types  : require
-#extension GL_NV_mesh_shader	: require
-// #define GL_EXT_mesh_shader 1
+#endif
+
+#define MAX_VERTICES 64
+#define MAX_PRIMITIVES 84
+#define GROUP_SIZE 32
 
 struct Vertex
 {
-	float px, py, pz;
+#if USE_8BIT_16BIT_EXTENSIONS
+	float16_t px, py, pz;
 	uint8_t nx, ny, nz, nw;
+	float16_t s, t;
+#else
+	float px, py, pz;
+	float nx, ny, nz;
 	float s, t;
+#endif
+	
 };
 
 struct Meshlet
 {
-	uint vertices[64];
-	uint8_t indices[126]; // up to 42 triangels
+	uint vertices[MAX_VERTICES];
+	uint8_t indices[MAX_PRIMITIVES*3]; // up to MAX_PRIMITIVES triangels
 	uint8_t vertexCount;
-	uint8_t indexCount;
+	uint8_t triangleCount;
 };
 
 layout (std430, binding = 0) buffer Vertices
@@ -32,12 +49,12 @@ layout (std430, binding = 1) buffer Meshlets
 };
 
 // Set the number of threads per workgroup (always one-dimensional)
-layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 // Mesh shader
 // The primitive type (points, lines, triangles)
 layout (triangles) out;
 // Maximum allocation size for each meshlet
-layout (max_vertices = 64, max_primitives = 42) out;
+layout (max_vertices = MAX_VERTICES, max_primitives = MAX_PRIMITIVES) out;
 
 layout (location = 0) out Interpolant
 {
@@ -98,12 +115,22 @@ perprimitiveNV out gl_MeshPerPrimitiveNV {
  * SetMeshOutputsEXT -> OpSetMeshOutputsEXT()
  */
 
+#if USE_PER_PRIMITIVE
+layout (location = 2)
+perprimitiveNV out vec3 triangleNormals[];
+#endif
+
 void main()
 {
-	uint meshletIndex = gl_WorkGroupID.x;
+	const uint meshletIndex = gl_WorkGroupID.x;
+	const uint localThreadId = gl_LocalInvocationID.x;
+
+	const uint vertexCount = uint(meshlets[meshletIndex].vertexCount);
+	const uint triangleCount = uint(meshlets[meshletIndex].triangleCount);
+	const uint indexCount = triangleCount * 3;
 
 	// Vertices
-	for (uint i = 0; i < uint(meshlets[meshletIndex].vertexCount); ++i)
+	for (uint i = localThreadId; i < vertexCount; i += GROUP_SIZE)
 	{
 		uint vi = meshlets[meshletIndex].vertices[i];
 
@@ -119,10 +146,32 @@ void main()
 	// SetMeshOutputEXT();
 
 	// Primitives
-	gl_PrimitiveCountNV = uint(meshlets[meshletIndex].indexCount) / 3;
-
-	for (uint i = 0; i < meshlets[meshletIndex].indexCount; ++i)
+	for (uint i = localThreadId; i < indexCount; i += GROUP_SIZE)
 	{
 		gl_PrimitiveIndicesNV[i] = meshlets[meshletIndex].indices[i];
 	}
+
+#if USE_PER_PRIMITIVE
+	for (uint i = localThreadId; i < triangleCount; i += GROUP_SIZE)
+	{
+		uint index0 = uint(meshlets[meshletIndex].indices[i * 3 + 0]);
+		uint index1 = uint(meshlets[meshletIndex].indices[i * 3 + 1]);
+		uint index2 = uint(meshlets[meshletIndex].indices[i * 3 + 2]);
+
+		uint vi0 = meshlets[meshletIndex].vertices[index0];
+		uint vi1 = meshlets[meshletIndex].vertices[index1];
+		uint vi2 = meshlets[meshletIndex].vertices[index2];
+
+		vec3 p0 = vec3(vertices[vi0].px, vertices[vi0].py, vertices[vi0].pz);		
+		vec3 p1 = vec3(vertices[vi1].px, vertices[vi1].py, vertices[vi1].pz);		
+		vec3 p2 = vec3(vertices[vi2].px, vertices[vi2].py, vertices[vi2].pz);
+
+		vec3 n = normalize(cross(p1 - p0, p2 - p0));
+
+		triangleNormals[i] = n;
+	}
+#endif
+	
+	if (localThreadId == 0)
+	gl_PrimitiveCountNV = uint(meshlets[meshletIndex].triangleCount);
 }
