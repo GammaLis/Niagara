@@ -1,37 +1,10 @@
-#include <iostream>
-#include <vector>
-#include <array>
-#include <set>
-#include <cassert>
-#include <optional>
-#include <cstdint>
-#include <limits>		// std::numeric_limits
-#include <algorithm>	// std::clamp
-#include <fstream>
-
 // Ref: https://developer.nvidia.com/blog/introduction-turing-mesh-shaders/
 
-#define NOMINMAX
+#include "pch.h"
+#include "SwapChain.h"
 
-#if 1
-#define GLFW_INCLUDE_VULKAN
-//#if defined(GLFW_INCLUDE_VULKAN)
-//#include <vulkan/vulkan.h>
-//#endif /* Vulkan header */
-#endif
-
-#ifndef GLFW_INCLUDE_VULKAN
-
-#if 1
-#include <vulkan/vulkan.h>
-#else
-// A bit slow
-#include <vulkan/vulkan.hpp>
-#endif
-
-#endif
-
-#include <volk.h>
+#include <iostream>
+#include <fstream>
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <GLFW/glfw3.h>
@@ -57,16 +30,10 @@ using namespace std;
 #define DRAW_MODE DRAW_SIMPLE_MESH
 
 #define VERTEX_INPUT_MODE 1
+#define FLIP_VIEWPORT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_MESHLETS 1
 // Mesh shader needs the 8bit_16bit_extension
-
-
-#define VK_CHECK(call) \
-	do { \
-		VkResult result = call; \
-		assert(result == VK_SUCCESS); \
-	} while (0)
 
 
 /// Global variables
@@ -137,7 +104,6 @@ VkExtent2D g_ViewportExtent;
 
 uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties);
 VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool);
-
 
 
 /// Structures
@@ -389,6 +355,28 @@ struct BufferManager
 		vertexBuffer.Destory(device);
 		indexBuffer.Destory(device);
 		meshletBuffer.Destory(device);
+	}
+};
+
+struct DescriptorInfo 
+{
+	union 
+	{
+		VkDescriptorBufferInfo bufferInfo;
+		VkDescriptorImageInfo imageInfo;
+	};
+
+	DescriptorInfo(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize range = VK_WHOLE_SIZE)
+	{
+		bufferInfo.buffer = buffer;
+		bufferInfo.offset = offset;
+		bufferInfo.range = range;
+	}
+	DescriptorInfo(VkSampler sampler, VkImageView imageView, VkImageLayout imageLayout)
+	{
+		imageInfo.sampler = sampler;
+		imageInfo.imageView = imageView;
+		imageInfo.imageLayout = imageLayout;
 	}
 };
 
@@ -1146,6 +1134,7 @@ struct GraphicsPipelineDetails
 
 	VkRenderPass renderPass;
 	VkPipelineLayout layout;
+	VkDescriptorUpdateTemplate descriptorUpdateTemplate;
 	VkPipeline pipeline;
 
 	std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
@@ -1156,13 +1145,112 @@ struct GraphicsPipelineDetails
 		vkDestroyShaderModule(device, taskShader, nullptr);
 		vkDestroyShaderModule(device, meshShader, nullptr);
 		vkDestroyShaderModule(device, fragmentShader, nullptr);
+
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyPipelineLayout(device, layout, nullptr);
+		vkDestroyDescriptorUpdateTemplate(device, descriptorUpdateTemplate, nullptr);
 		for (const auto &setLayout : descriptorSetLayouts)
 			vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
 		vkDestroyPipeline(device, pipeline, nullptr);
 	}
 };
+
+VkDescriptorSetLayout GetDescriptorSetLayout(VkDevice device)
+{
+#if USE_MESHLETS
+	VkDescriptorSetLayoutBinding setBinding[2] = {};
+	setBinding[0].binding = 0;
+	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	setBinding[0].descriptorCount = 1;
+	setBinding[0].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
+
+	setBinding[1].binding = 1;
+	setBinding[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	setBinding[1].descriptorCount = 1;
+	setBinding[1].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
+
+#elif VERTEX_INPUT_MODE
+	VkDescriptorSetLayoutBinding setBinding[1] = {};
+	setBinding[0].binding = 0;
+	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	setBinding[0].descriptorCount = 1;
+	setBinding[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+#endif
+
+	VkDescriptorSetLayoutCreateInfo setCreateInfo{};
+	setCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+#if USE_MESHLETS || VERTEX_INPUT_MODE
+	setCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+	setCreateInfo.bindingCount = ARRAYSIZE(setBinding);
+	setCreateInfo.pBindings = setBinding;
+#endif
+
+	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+	VK_CHECK(vkCreateDescriptorSetLayout(device, &setCreateInfo, nullptr, &setLayout));
+
+	return setLayout;
+}
+
+VkPipelineLayout GetPipelineLayout(VkDevice device, GraphicsPipelineDetails& pipelineDetails)
+{
+	VkDescriptorSetLayout setLayout = GetDescriptorSetLayout(device);
+	assert(setLayout);
+	pipelineDetails.descriptorSetLayouts.push_back(setLayout);
+
+	VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
+	pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	pipelineLayoutCreateInfo.setLayoutCount = 1;
+	pipelineLayoutCreateInfo.pSetLayouts = &setLayout;
+	pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
+	pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
+
+	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+	VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
+
+	return pipelineLayout;
+}
+
+VkDescriptorUpdateTemplate GetDescriptorUpdateTemplate(VkDevice device, GraphicsPipelineDetails &pipelineDetails, VkPipelineBindPoint bindPoint, uint32_t setLayoutIndex = 0)
+{
+	assert(pipelineDetails.descriptorSetLayouts.size() > setLayoutIndex);
+
+	std::vector<VkDescriptorUpdateTemplateEntry> entries;
+
+	VkDescriptorUpdateTemplateEntry templateEntry{};
+
+	templateEntry.descriptorCount = 1;
+	templateEntry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	templateEntry.dstArrayElement = 0;
+	templateEntry.dstBinding = 0;
+	templateEntry.stride = sizeof(DescriptorInfo);
+	templateEntry.offset = 0;
+	entries.push_back(templateEntry);
+
+#if USE_MESHLETS
+	templateEntry.descriptorCount = 1;
+	templateEntry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	templateEntry.dstArrayElement = 0;
+	templateEntry.dstBinding = 1;
+	templateEntry.stride = sizeof(DescriptorInfo);
+	templateEntry.offset = templateEntry.stride;
+	entries.push_back(templateEntry);
+#endif
+
+	VkDescriptorUpdateTemplateCreateInfo createInfo{};
+	createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+	createInfo.pipelineBindPoint = bindPoint;
+	createInfo.pipelineLayout = pipelineDetails.layout;
+	createInfo.descriptorSetLayout = pipelineDetails.descriptorSetLayouts[setLayoutIndex];
+	createInfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR;
+	createInfo.descriptorUpdateEntryCount = static_cast<uint32_t>(entries.size());
+	createInfo.pDescriptorUpdateEntries = entries.data();
+
+	VkDescriptorUpdateTemplate descUpdateTemplate = VK_NULL_HANDLE;
+	VK_CHECK(vkCreateDescriptorUpdateTemplate(device, &createInfo, nullptr, &descUpdateTemplate));
+
+	return descUpdateTemplate;
+}
+
 VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkExtent2D viewportExtent)
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
@@ -1260,7 +1348,11 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	rasterizerStateCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizerStateCreateInfo.lineWidth = 1.0f;
 	rasterizerStateCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT; // VK_CULL_MODE_BACK_BIT VK_CULL_MODE_NONE
+#if FLIP_VIEWPORT
+	rasterizerStateCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+#else
 	rasterizerStateCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+#endif
 	rasterizerStateCreateInfo.depthBiasEnable = VK_FALSE;
 	rasterizerStateCreateInfo.depthBiasConstantFactor = 0.0f;
 	rasterizerStateCreateInfo.depthBiasClamp = 0.0f;
@@ -1305,50 +1397,14 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	auto renderPass = pipeline.renderPass;
 
 	// Pipeline layout
-#if USE_MESHLETS
-	VkDescriptorSetLayoutBinding setBinding[2] = {};
-	setBinding[0].binding = 0;
-	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	setBinding[0].descriptorCount = 1;
-	setBinding[0].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
-
-	setBinding[1].binding = 1;
-	setBinding[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	setBinding[1].descriptorCount = 1;
-	setBinding[1].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
-
-#elif VERTEX_INPUT_MODE
-	VkDescriptorSetLayoutBinding setBinding[1] = {};
-	setBinding[0].binding = 0;
-	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	setBinding[0].descriptorCount = 1;
-	setBinding[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-#endif
-
-	VkDescriptorSetLayoutCreateInfo setCreateInfo{};
-	setCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-#if USE_MESHLETS || VERTEX_INPUT_MODE
-	setCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-	setCreateInfo.bindingCount = ARRAYSIZE(setBinding);
-	setCreateInfo.pBindings = setBinding;
-#endif
-
-	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
-	VK_CHECK(vkCreateDescriptorSetLayout(device, &setCreateInfo, nullptr, &setLayout));
-
-	pipeline.descriptorSetLayouts.push_back(setLayout);
-
-	VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
-	pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutCreateInfo.setLayoutCount = 1;
-	pipelineLayoutCreateInfo.pSetLayouts = &setLayout;
-	pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
-	pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
-
-	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-	VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
-
+	VkPipelineLayout pipelineLayout = GetPipelineLayout(device, pipeline);
+	assert(pipelineLayout);
 	pipeline.layout = pipelineLayout;
+
+	// Descriptor update template
+	VkDescriptorUpdateTemplate descriptorUpdateTemplate = GetDescriptorUpdateTemplate(device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS);
+	assert(descriptorUpdateTemplate);
+	pipeline.descriptorUpdateTemplate = descriptorUpdateTemplate;
 
 	// Destroyed in `pipeline`
 	// vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
@@ -1468,15 +1524,21 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 	const auto& ib = bufferMgr.indexBuffer;
 
 #if VERTEX_INPUT_MODE == 1
-
 	VkDescriptorBufferInfo vertexBufferInfo{};
 	vertexBufferInfo.buffer = vb.buffer;
 	vertexBufferInfo.offset = 0;
 	vertexBufferInfo.range = vb.size;
 
+	std::vector<DescriptorInfo> descriptorInfos;
+	descriptorInfos.emplace_back(DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size)));
+
 #if USE_MESHLETS
 	const auto& mb = bufferMgr.meshletBuffer;
 
+	descriptorInfos.emplace_back(DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size)));
+
+	// Not used now, to be deleted
+	// >>>
 	VkDescriptorBufferInfo meshletBufferInfo{};
 	meshletBufferInfo.buffer = mb.buffer;
 	meshletBufferInfo.offset = 0;
@@ -1495,6 +1557,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 	writeDescriptors[1].descriptorCount = 1;
 	writeDescriptors[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	writeDescriptors[1].pBufferInfo = &meshletBufferInfo;
+	// <<<
 
 #else
 	VkWriteDescriptorSet writeDescriptors[1] = {};
@@ -1508,7 +1571,11 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 #endif
 
+#if 1
+	vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelineDetails.descriptorUpdateTemplate, pipelineDetails.layout, 0, descriptorInfos.data());
+#else
 	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.layout, 0, ARRAYSIZE(writeDescriptors), writeDescriptors);
+#endif
 	
 #else
 	VkDeviceSize offset = 0;
@@ -1519,7 +1586,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 #endif	
 
 	VkViewport viewport{};
-#if 1
+#if !FLIP_VIEWPORT
 	viewport.x = 0.0f;
 	viewport.y = 0.0f;
 	viewport.width = static_cast<float>(g_ViewportExtent.width);

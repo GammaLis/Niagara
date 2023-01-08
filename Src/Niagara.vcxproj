@@ -108,6 +108,8 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\glfw\include;..\External\glm;..\External\volk;..\External\fast_obj;..\External\meshoptimizer\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -180,7 +182,9 @@
     <ClCompile Include="..\External\meshoptimizer\src\vfetchanalyzer.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp" />
     <ClCompile Include="..\External\volk\volk.c" />
+    <ClCompile Include="Device.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="SwapChain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h" />
@@ -190,6 +194,9 @@
     <ClInclude Include="..\External\glfw\src\win32_time.h" />
     <ClInclude Include="..\External\meshoptimizer\src\meshoptimizer.h" />
     <ClInclude Include="..\External\volk\volk.h" />
+    <ClInclude Include="Device.h" />
+    <ClInclude Include="pch.h" />
+    <ClInclude Include="SwapChain.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">

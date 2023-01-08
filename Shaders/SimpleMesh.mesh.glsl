@@ -1,42 +1,23 @@
 #version 450 core
 
-#define USE_8BIT_16BIT_EXTENSIONS 1
-#define USE_PER_PRIMITIVE 0
+#extension GL_GOOGLE_include_directive	: require
+#include "MeshCommon.h"
 
-#extension GL_EXT_shader_16bit_storage  : require
+#extension GL_NV_mesh_shader	: require
 // #define GL_EXT_mesh_shader 1
 
+#if 0
 #if USE_8BIT_16BIT_EXTENSIONS
-#extension GL_NV_mesh_shader	: require
+#extension GL_EXT_shader_16bit_storage  : require
 #extension GL_EXT_shader_8bit_storage   : require
 #extension GL_EXT_shader_explicit_arithmetic_types  : require
 #endif
+#endif
 
-#define MAX_VERTICES 64
-#define MAX_PRIMITIVES 84
+// Settings
 #define GROUP_SIZE 32
 
-struct Vertex
-{
-#if USE_8BIT_16BIT_EXTENSIONS
-	float16_t px, py, pz;
-	uint8_t nx, ny, nz, nw;
-	float16_t s, t;
-#else
-	float px, py, pz;
-	float nx, ny, nz;
-	float s, t;
-#endif
-	
-};
-
-struct Meshlet
-{
-	uint vertices[MAX_VERTICES];
-	uint8_t indices[MAX_PRIMITIVES*3]; // up to MAX_PRIMITIVES triangels
-	uint8_t vertexCount;
-	uint8_t triangleCount;
-};
+#define DEBUG 0
 
 layout (std430, binding = 0) buffer Vertices
 {
@@ -120,6 +101,7 @@ layout (location = 2)
 perprimitiveNV out vec3 triangleNormals[];
 #endif
 
+
 void main()
 {
 	const uint meshletIndex = gl_WorkGroupID.x;
@@ -128,6 +110,8 @@ void main()
 	const uint vertexCount = uint(meshlets[meshletIndex].vertexCount);
 	const uint triangleCount = uint(meshlets[meshletIndex].triangleCount);
 	const uint indexCount = triangleCount * 3;
+
+	vec3 meshletColor = IntToColor(meshletIndex);
 
 	// Vertices
 	for (uint i = localThreadId; i < vertexCount; i += GROUP_SIZE)
@@ -139,7 +123,11 @@ void main()
 		vec2 texcoord = vec2(vertices[vi].s, vertices[vi].t);
 
 		gl_MeshVerticesNV[i].gl_Position = vec4(position, 1.0);
+	#if !DEBUG
 		OUT[i].outNormal = normal;
+	#else
+		OUT[i].outNormal = meshletColor;
+	#endif
 		OUT[i].outUV = texcoord;
 	}
 

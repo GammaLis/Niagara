@@ -144,6 +144,12 @@
     <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp">
       <Filter>meshoptimizer</Filter>
     </ClCompile>
+    <ClCompile Include="SwapChain.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Device.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -166,6 +172,15 @@
     </ClInclude>
     <ClInclude Include="..\External\meshoptimizer\src\meshoptimizer.h">
       <Filter>meshoptimizer</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="SwapChain.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Device.h">
+      <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
