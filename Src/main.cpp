@@ -1,12 +1,12 @@
 // Ref: https://developer.nvidia.com/blog/introduction-turing-mesh-shaders/
 
 #include "pch.h"
+#include "Device.h"
 #include "SwapChain.h"
 
 #include <iostream>
 #include <fstream>
 
-#define VK_USE_PLATFORM_WIN32_KHR
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -77,15 +77,22 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 static const uint32_t g_BufferSize = 128 * 1024 * 1024;
 
+const std::vector<const char*> g_InstanceExtensions =
+{
+	VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
+};
+
 const std::vector<const char*> g_DeviceExtensions =
 {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
 	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
+	VK_KHR_SPIRV_1_4_EXTENSION_NAME,
 
 #if USE_MESHLETS
-	VK_NV_MESH_SHADER_EXTENSION_NAME
+	VK_NV_MESH_SHADER_EXTENSION_NAME,
+	// VK_EXT_MESH_SHADER_EXTENSION_NAME
 #endif
 
 };
@@ -473,16 +480,30 @@ bool CheckValidationLayerSupport(const std::vector<const char*> &validationLayer
 	return true;
 }
 
-std::vector<const char*> GetRequiredExtensions()
+std::vector<const char*> GetInstanceExtensions()
 {
+#if 0
 	uint32_t glfwExtensionCount = 0;
 	const char** glfwExtensions;
 	glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
 	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
+#else
+	std::vector<const char*> extensions = { VK_KHR_SURFACE_EXTENSION_NAME };
+
+	// Now it's only win32
+#if defined(_WIN32)
+	extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#endif
+
+#endif
+
 	if (g_bEnableValidationLayers)
+	{
+		extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);	// SRS - Dependency when VK_EXT_DEBUG_MARKER is enabled
 		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+	}
 
 	return extensions;
 }
@@ -518,7 +539,7 @@ VkInstance GetVulkanInstance()
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 	// Using value initialization to leave it as `nullptr`
 	// appInfo.pNext = nullptr;
-	appInfo.pApplicationName = "Hello Triangle";
+	appInfo.pApplicationName = "Hello Vulkan";
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.pEngineName = "No Engine";
 	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -531,11 +552,36 @@ VkInstance GetVulkanInstance()
 
 	assert(!g_bEnableValidationLayers || CheckValidationLayerSupport(validationLayers));
 
-	std::vector<const char*> extensions = {
-		VK_KHR_SURFACE_EXTENSION_NAME
-	};
+	// Get extensions supported by the instance
+	std::vector<std::string> supportedExtensions;
 
-	extensions = GetRequiredExtensions();
+	uint32_t extensionCount = 0;
+	vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+	if (extensionCount > 0)
+	{
+		std::vector<VkExtensionProperties> extensions(extensionCount);
+		if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) == VK_SUCCESS)
+		{
+			for (const auto &ext : extensions)
+				supportedExtensions.push_back(ext.extensionName);
+		}
+	}
+
+	std::vector<const char*> extensions = GetInstanceExtensions();
+
+	if (!g_InstanceExtensions.empty())
+	{
+		for (const char *enabledExt : g_InstanceExtensions)
+		{
+			// Output message if requested extension is not available
+			if (std::find(supportedExtensions.begin(), supportedExtensions.end(), enabledExt) == supportedExtensions.end())
+			{
+				std::cerr << "Enabled instance extension: " << enabledExt << " is not present at instance level.\n";
+				continue;
+			}
+			extensions.push_back(enabledExt);
+		}
+	}
 
 	VkInstance instance = VK_NULL_HANDLE;
 	{
@@ -649,7 +695,7 @@ struct SwapChainSupportDetails
 
 SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice device, VkSurfaceKHR surface)
 {
-	SwapChainSupportDetails details;
+	SwapChainSupportDetails details{};
 
 	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
 
@@ -906,7 +952,7 @@ VkSurfaceKHR GetWindowSurface(VkInstance instance, GLFWwindow *window)
 	VK_CHECK(vkCreateWin32SurfaceKHR(instance, &createInfo, nullptr, &surface));
 
 #else
-	VK_CHECK( glfwCreateWindowSurface(instance, window, nullptr, &surface) );
+	VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 #endif
 
 	return surface;

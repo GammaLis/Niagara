@@ -12,6 +12,8 @@
 
 #define NOMINMAX
 
+// Vulkan
+
 #include <volk.h>
 
 #if 1

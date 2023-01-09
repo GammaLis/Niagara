@@ -14,9 +14,18 @@
 
 namespace Niagara
 {
+	std::vector<const char*> GetInstanceExtensions();
+	bool CheckValidationLayerSupport(const std::vector<const char*>& validationLayers);
+	VkInstance GetVulkanInstance(const std::vector<const char*> &enabledExtensions, bool bEnableVadilationLayers = true);
+	uint32_t GetGraphicsFamilyIndex(VkPhysicalDevice physicalDevice);
+	bool SupportsPresentation(VkPhysicalDevice physicalDevice, uint32_t queueIndex);
+	VkPhysicalDevice CreatePhysicalDevice(VkInstance instance);
+
 	class Device
 	{
 	public:
+		// Vulkan instance
+		VkInstance instance;
 		// Physical device representation
 		VkPhysicalDevice physicalDevice;
 		// Logical device representation (application's view of the device)
@@ -45,12 +54,13 @@ namespace Niagara
 			uint32_t transfer;
 		} queueFamilyIndices;
 
-		explicit Device(VkPhysicalDevice physicalDevice);
+		bool Init(VkInstance instance, VkPhysicalDeviceFeatures enabledFeatures, const std::vector<const char*>& enabledExtensions, void* pNextChain, bool bUseSwapChain = true, VkQueueFlags requestedQueueTypes = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
 		~Device();
 
 		operator VkDevice() const { return logicalDevice; }
 
-		uint32_t GetMeoryType(uint32_t typeBits, VkMemoryPropertyFlags properties, VkBool32* memTypeFound = nullptr) const;
+		void UpdatePhysicalDeviceProperties(VkPhysicalDevice physicalDevice);
+		uint32_t GetMemoryType(uint32_t typeBits, VkMemoryPropertyFlags properties, VkBool32* memTypeFound = nullptr) const;
 		uint32_t GetQueueFamilyIndex(VkQueueFlags queueFlags) const;
 		VkResult CreateLogicalDevice(VkPhysicalDeviceFeatures enabledFeatures, const std::vector<const char*>& enabledExtensions, void* pNextChain, bool bUseSwapChain = true, VkQueueFlags requestedQueueTypes = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
 		VkCommandPool CreateCommandPool(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
