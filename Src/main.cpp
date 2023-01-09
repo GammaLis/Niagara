@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <queue>
 
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -115,28 +116,58 @@ VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool);
 
 /// Structures
 
-/// Graphics
+/// Command manager
 namespace Niagara
 {
-	class Graphics
+	class CommandManager
 	{
 	public:
-		VkInstance instance;
-		VkPhysicalDevice physicalDevice;
-		VkDevice device;
-		VkPhysicalDeviceMemoryProperties deviceMemoryProperties;
-		VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+		VkCommandBuffer CreateCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+		{
+			VkCommandBufferAllocateInfo allocInfo{};
+			allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			allocInfo.commandPool = commandPool;
+			allocInfo.level = level;
+			allocInfo.commandBufferCount = 1;
+
+			VkCommandBuffer commandBuffer;
+			VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer));
+
+			return commandBuffer;
+		}
+
+		void Init(const Device& device)
+		{
+			commandPool = device.CreateCommandPool(device.queueFamilyIndices.graphics);
+
+			vkGetDeviceQueue(device, device.queueFamilyIndices.graphics, 0, &graphicsQueue);
+			vkGetDeviceQueue(device, device.queueFamilyIndices.compute, 0, &computeQueue);
+			vkGetDeviceQueue(device, device.queueFamilyIndices.transfer, 0, &transferQueue);
+		}
+
+		void Cleanup(const Device& device)
+		{
+			vkDestroyCommandPool(device, commandPool, nullptr);
+		}
+
+		VkCommandBuffer GetCommandBuffer(const Device& device)
+		{
+			VkCommandBuffer cmd = CreateCommandBuffer(device, commandPool);
+			return cmd;
+		}
 
 		VkQueue graphicsQueue;
-		VkQueue commandQueue;
-		VkQueue presentQueue;
+		VkQueue computeQueue;
+		VkQueue transferQueue;
 
 		VkCommandPool commandPool;
 
-		// TODO...
-		// void Init(GLFWwindow* window, const std::vector<const char*>& extensions);
+	private:
+		std::queue<VkCommandBuffer> m_CommandBuffers;
 	};
 }
+
+Niagara::CommandManager g_CommandMgr{};
 
 struct Vertex
 {
@@ -254,9 +285,9 @@ struct GpuBuffer
 	uint32_t stride = 0;
 	uint32_t elementCount = 0;
 
-	static void Copy(Niagara::Graphics& gfx, GpuBuffer &dstBuffer, const GpuBuffer &srcBuffer, VkDeviceSize size)
+	static void Copy(VkDevice device, GpuBuffer &dstBuffer, const GpuBuffer &srcBuffer, VkDeviceSize size)
 	{
-		VkCommandBuffer cmd = GetCommandBuffer(gfx.device, gfx.commandPool);
+		VkCommandBuffer cmd = GetCommandBuffer(device, g_CommandMgr.commandPool);
 
 		VkCommandBufferBeginInfo cmdBeginInfo{};
 		cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -276,20 +307,18 @@ struct GpuBuffer
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &cmd;
 
-		vkQueueSubmit(gfx.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueSubmit(g_CommandMgr.transferQueue, 1, &submitInfo, VK_NULL_HANDLE);
 		// Unlike the draw commands, there are no events we need to wait on this time. We just want to execute the transfer on the buffers immediately.
 		// We could use a fence and wait with `vkWaitForFences`, or simply wait for the transfer queue to become idle with `vkQueueWaitIdle`. A fence would allow
 		// you to schedule multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time. That may give
 		// the driver more opportunities to optimize.
-		vkQueueWaitIdle(gfx.graphicsQueue);
+		vkQueueWaitIdle(g_CommandMgr.transferQueue);
 
-		vkFreeCommandBuffers(gfx.device, gfx.commandPool, 1, &cmd);
+		vkFreeCommandBuffers(device, g_CommandMgr.commandPool, 1, &cmd);
 	}
 
-	void Init(Niagara::Graphics &gfx, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
+	void Init(Niagara::Device &device, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
 	{
-		VkDevice device = gfx.device;
-
 		VkBufferCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		createInfo.size = size;
@@ -305,7 +334,7 @@ struct GpuBuffer
 		VkMemoryAllocateInfo allocInfo{};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = FindMemoryType(gfx.deviceMemoryProperties, memRequirements.memoryTypeBits, memoryFlags);
+		allocInfo.memoryTypeIndex = FindMemoryType(device.memoryProperties, memRequirements.memoryTypeBits, memoryFlags);
 
 		memory = VK_NULL_HANDLE;
 		VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));
@@ -321,10 +350,10 @@ struct GpuBuffer
 		this->size = size;
 
 		if (pInitialData != nullptr)
-			Update(gfx, pInitialData, size);
+			Update(device, pInitialData, size);
 	}
 
-	void Update(Niagara::Graphics &gfx, const void *pData, size_t size)
+	void Update(Niagara::Device &device, const void *pData, size_t size)
 	{
 		if (buffer == VK_NULL_HANDLE || pData == nullptr) 
 			return;
@@ -336,11 +365,11 @@ struct GpuBuffer
 		else
 		{
 			GpuBuffer scratchBuffer{};
-			scratchBuffer.Init(gfx, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, pData);
+			scratchBuffer.Init(device, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, pData);
 
-			Copy(gfx, *this, scratchBuffer, size);
+			Copy(device, *this, scratchBuffer, size);
 
-			scratchBuffer.Destory(gfx.device);
+			scratchBuffer.Destory(device);
 		}
 	}	
 
@@ -996,7 +1025,7 @@ SwapChainInfo GetSwapChainInfo(VkPhysicalDevice physicalDevice, VkSurfaceKHR sur
 	return info;
 }
 
-VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, const SwapChainInfo &info)
+VkSwapchainKHR GetSwapChain(VkDevice device, VkSurfaceKHR surface, const SwapChainInfo &info)
 {
 	VkSurfaceFormatKHR surfaceFormat = info.surfaceFormat;
 	VkPresentModeKHR presentMode = info.presentMode;
@@ -1021,6 +1050,7 @@ VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, Vk
 	// We need to specify how to handle swap chain images that will be used across multiple queue families. That will be the case in our app
 	// if the graphics queue family is different from the presentation family. We'll be drawing on the images in the swap chain from the graphics queue
 	// and then submitting them on the presentation queue.
+#if 0
 	QueueFamilyIndices indices = FindQueueFamilies(physicalDevice, surface);
 	uint32_t queueFamilyIndices[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
 	if (indices.graphicsFamily != indices.presentFamily)
@@ -1031,6 +1061,7 @@ VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, Vk
 		createInfo.pQueueFamilyIndices = queueFamilyIndices;
 	}
 	else
+#endif
 	{
 		// An image is owned by one queue family at a time and ownership must be explicitly transferred before using it in another queue family.
 		// This option offers the best performance
@@ -1510,12 +1541,12 @@ void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, 
 	}
 }
 
-VkCommandPool GetCommandPool(VkDevice device, const QueueFamilyIndices &indices)
+VkCommandPool GetCommandPool(VkDevice device, uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
 {	
 	VkCommandPoolCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-	createInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-	createInfo.queueFamilyIndex = indices.graphicsFamily.value();
+	createInfo.queueFamilyIndex = queueFamilyIndex;
+	createInfo.flags = createFlags;
 
 	VkCommandPool commandPool = VK_NULL_HANDLE;
 	VK_CHECK(vkCreateCommandPool(device, &createInfo, nullptr, &commandPool));
@@ -1747,7 +1778,7 @@ void CleanupSwapChain(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkI
 	vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
 
-void GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainKHR &swapChain, 
+void GetSwapChain(VkDevice device, VkSwapchainKHR &swapChain, 
 	std::vector<VkImage> &swapChainImages, std::vector<VkImageView> &swapChainImageViews, std::vector<VkFramebuffer> &framebuffers,
 	VkSurfaceKHR surface, VkRenderPass renderPass, const SwapChainInfo &info)
 {
@@ -1759,7 +1790,7 @@ void GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainK
 		CleanupSwapChain(device, swapChain, swapChainImageViews, framebuffers);
 	}
 
-	swapChain = GetSwapChain(physicalDevice, device, surface, info);
+	swapChain = GetSwapChain(device, surface, info);
 	assert(swapChain);
 
 	GetSwapChainImages(device, swapChainImages, swapChain);
@@ -2069,40 +2100,54 @@ int main()
 		assert(debugMessenger);
 	}
 
-	VkSurfaceKHR surface = GetWindowSurface(instance, window);
-	assert(surface);
+	// Device features
+	VkPhysicalDeviceFeatures physicalDeviceFeatures{};
 
-	VkPhysicalDevice physicalDevice = GetPhysicalDevice(instance, surface);
-	assert(physicalDevice);
-	g_PhysicalDevice = physicalDevice;
+	// Device extensions
+	void* pNextChain = nullptr;
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS || USE_MESHLETS
+	void** pNext = &pNextChain;
 
-	// The `VkPhysicalDeviceMemoryProperties` has 2 arrays `memoryTypes` and `memoryHeaps`.
-	// Memory heaps are distinct memory resources like dedicated VRAM and swap space in RAM for when VRAM runs out.
-	// The different types of memory exist within these heaps.
-	VkPhysicalDeviceMemoryProperties memProperties;
-	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS 
+	VkPhysicalDevice8BitStorageFeatures features8Bit{};
+	features8Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
+	features8Bit.storageBuffer8BitAccess = true;
 
-	QueueFamilyIndices indices = FindQueueFamilies(physicalDevice, surface);
+	VkPhysicalDevice16BitStorageFeatures features16Bit{};
+	features16Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+	features16Bit.storageBuffer16BitAccess = true;
 
-	VkDevice device = GetLogicalDevice(physicalDevice, indices);
-	assert(device);
-	g_Device = device;
+	*pNext = &features16Bit;
+	features16Bit.pNext = &features8Bit;
+	pNext = &features8Bit.pNext;
+#endif
+
+#if USE_MESHLETS
+	VkPhysicalDeviceMeshShaderFeaturesNV featureMeshShader{};
+	featureMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV;
+	featureMeshShader.meshShader = true;
+
+	*pNext = &featureMeshShader;
+#endif
+
+#endif
+
+	Niagara::Device device{};
+	device.Init(instance, physicalDeviceFeatures, g_DeviceExtensions, pNextChain);
 
 	volkLoadDevice(device);
 
+	g_CommandMgr.Init(device);
+
+	VkSurfaceKHR surface = GetWindowSurface(instance, window);
+	assert(surface);
+
 	// Retrieving queue handles
-	VkQueue graphicsQueue = VK_NULL_HANDLE;
-	// We are only creating a single queue from this family, we'll simply use index 0
-	vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
 	assert(graphicsQueue);
 
-	// Creating the presentation queue
-	VkQueue presentQueue = VK_NULL_HANDLE;
-	vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
-	assert(presentQueue);
-
 	// Update swap chain surface format & extent
-	SwapChainInfo swapChainInfo = GetSwapChainInfo(physicalDevice, surface, window);
+	SwapChainInfo swapChainInfo = GetSwapChainInfo(device.physicalDevice, surface, window);
 
 	// Need swap chain surface format
 	VkRenderPass renderPass = GetRenderPass(device);
@@ -2113,25 +2158,8 @@ int main()
 	std::vector<VkImageView> swapChainImageViews;
 	std::vector<VkFramebuffer> framebuffers;
 	
-#if 0
-	swapChain = GetSwapChain(physicalDevice, device, surface, swapChainInfo);
-	assert(swapChain);
-
-	// Retrieving the swap chain images
-	GetSwapChainImages(device, swapChainImages, swapChain);
-	assert(!swapChainImages.empty());
-	
-	GetImageViews(device, swapChainImageViews, swapChainImages, swapChainInfo.surfaceFormat.format);
-	assert(!swapChainImageViews.empty());
-
-	// Frame buffers
-	GetFramebuffers(device, framebuffers, swapChainImageViews, renderPass);
-	assert(!framebuffers.empty());
-
-#else
-	GetSwapChain(physicalDevice, device, swapChain, swapChainImages, swapChainImageViews, framebuffers,
+	GetSwapChain(device, swapChain, swapChainImages, swapChainImageViews, framebuffers,
 		surface, renderPass, swapChainInfo);
-#endif
 
 	// Pipeline
 	GraphicsPipelineDetails pipelineDetails{};
@@ -2141,23 +2169,6 @@ int main()
 	pipelineDetails.pipeline = graphicsPipeline;
 
 	// Command buffers
-	VkCommandPool commandPool = GetCommandPool(device, indices);
-	assert(commandPool);
-	g_CommandPool = commandPool;
-
-	// Graphics
-	Niagara::Graphics gfx{};
-	gfx.instance = instance;
-	gfx.physicalDevice = physicalDevice;
-	gfx.device = device;
-	gfx.debugMessenger = debugMessenger;
-	gfx.commandPool = commandPool;
-	gfx.deviceMemoryProperties = memProperties;
-	gfx.graphicsQueue = graphicsQueue;
-	gfx.presentQueue = presentQueue;
-
-	VkCommandBuffer commandBuffer = GetCommandBuffer(device, commandPool);
-	assert(commandBuffer);
 
 	// Creating the synchronization objects
 	// We'll need one semaphore to signal that an image has been acquired from the swapchain and is ready for rendering, another one to signal that
@@ -2165,7 +2176,7 @@ int main()
 	SyncObjects syncObjects = GetSyncObjects(device);
 
 	std::vector<FrameResources> frameResources;
-	GetFrameResources(device, frameResources, commandPool);
+	GetFrameResources(device, frameResources, g_CommandMgr.commandPool);
 
 	VkQueryPool queryPool = GetQueryPool(device, 128);
 	assert(queryPool);
@@ -2194,16 +2205,16 @@ int main()
 	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
 
 #if 1
-	vb.Init(gfx, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
+	vb.Init(device, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
 	if (!mesh.indices.empty())
 	{
 		size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
-		ib.Init(gfx, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
+		ib.Init(device, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
 	}
 #if USE_MESHLETS
 	GpuBuffer& meshletBuffer = bufferMgr.meshletBuffer;
 	size_t mbSize = mesh.meshlets.size() * sizeof(Meshlet);
-	meshletBuffer.Init(gfx, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
+	meshletBuffer.Init(device, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
 #endif
 
 #else
@@ -2256,8 +2267,8 @@ int main()
 		VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, currentSyncObjects.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || g_FramebufferResized)
 		{
-			swapChainInfo = GetSwapChainInfo(physicalDevice, surface, window);
-			GetSwapChain(physicalDevice, device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
+			swapChainInfo = GetSwapChainInfo(device.physicalDevice, surface, window);
+			GetSwapChain(device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
 			assert(swapChain);
 			g_FramebufferResized = false;
 			continue;
@@ -2280,11 +2291,11 @@ int main()
 			presentInfo.waitSemaphoreCount = 1;
 			presentInfo.pImageIndices = &imageIndex;
 
-			result = vkQueuePresentKHR(presentQueue, &presentInfo);
+			result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
 			if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || g_FramebufferResized)
 			{
-				swapChainInfo = GetSwapChainInfo(physicalDevice, surface, window);
-				GetSwapChain(physicalDevice, device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
+				swapChainInfo = GetSwapChainInfo(device.physicalDevice, surface, window);
+				GetSwapChain(device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
 				assert(swapChain);
 				g_FramebufferResized = false;
 			}
@@ -2311,14 +2322,11 @@ int main()
 
 	// Clean up Vulkan
 
+	// Resources
+
 	vkDestroyQueryPool(device, queryPool, nullptr);
 
-#if 1
 	bufferMgr.Cleanup(device);
-#else
-	DestroyBuffer(device, vb);
-	DestroyBuffer(device, ib);
-#endif
 
 	for (auto &frameResource : frameResources)
 	{
@@ -2328,14 +2336,15 @@ int main()
 
 	syncObjects.Cleanup(device);
 	
-	vkDestroyCommandPool(device, commandPool, nullptr);
-	
 	// Pipeline
 	pipelineDetails.Cleanup(device);
 
-	vkDestroyDevice(device, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);
 
+	g_CommandMgr.Cleanup(device);
+
+	device.Destroy();
+	
 	if (g_bEnableValidationLayers)
 		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 	vkDestroyInstance(instance, nullptr);

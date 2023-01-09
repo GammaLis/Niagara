@@ -177,7 +177,7 @@ namespace Niagara
 		return VK_QUEUE_FAMILY_IGNORED;
 	}
 
-	bool SupportsPresentation(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t familyIndex)
+	bool SupportsPresentation(VkPhysicalDevice physicalDevice, uint32_t familyIndex)
 	{
 #if defined(VK_USE_PLATFORM_WIN32_KHR)
 		return !!vkGetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, familyIndex);
@@ -205,7 +205,7 @@ namespace Niagara
 			uint32_t graphicsFamilyIndex = GetGraphicsFamilyIndex(physicalDevices[i]);
 			if (graphicsFamilyIndex == VK_QUEUE_FAMILY_IGNORED) continue;
 
-			bool bSupportsPresentation = SupportsPresentation(instance, physicalDevices[i], graphicsFamilyIndex);
+			bool bSupportsPresentation = SupportsPresentation(physicalDevices[i], graphicsFamilyIndex);
 			if (!bSupportsPresentation) continue;
 
 			if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
@@ -246,7 +246,7 @@ namespace Niagara
 		return true;
 	}
 
-	Device::~Device()
+	void Device::Destroy()
 	{
 		if (commandPool)
 			vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
@@ -501,7 +501,7 @@ namespace Niagara
 	}
 
 	// Create a command pool for allocation command buffers from
-	VkCommandPool Device::CreateCommandPool(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags)
+	VkCommandPool Device::CreateCommandPool(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags) const
 	{
 		VkCommandPoolCreateInfo cmdPoolInfo = {};
 		cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
