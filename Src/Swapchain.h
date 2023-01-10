@@ -34,8 +34,8 @@ namespace Niagara
 	class Swapchain
 	{
 	private:
-		VkInstance instance;
-		VkSurfaceKHR surface;
+		VkInstance instance = VK_NULL_HANDLE;
+		VkSurfaceKHR surface = VK_NULL_HANDLE;
 
 	public:
 		VkFormat colorFormat;

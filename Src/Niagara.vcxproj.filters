@@ -150,10 +150,10 @@
     <ClCompile Include="Utilities.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="Swapchain.cpp">
+    <ClCompile Include="Shaders.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="Shaders.cpp">
+    <ClCompile Include="Swapchain.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
