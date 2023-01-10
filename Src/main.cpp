@@ -2,7 +2,9 @@
 
 #include "pch.h"
 #include "Device.h"
-#include "SwapChain.h"
+#include "Swapchain.h"
+#include "Shaders.h"
+#include "Utilities.h"
 
 #include <iostream>
 #include <fstream>
@@ -122,7 +124,7 @@ namespace Niagara
 	class CommandManager
 	{
 	public:
-		VkCommandBuffer CreateCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+		static VkCommandBuffer CreateCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY)
 		{
 			VkCommandBufferAllocateInfo allocInfo{};
 			allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1122,47 +1124,11 @@ void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const 
 
 #pragma region Pipeline
 
-static std::vector<char> ReadFile(const std::string& fileName)
-{
-	// ate - start reading at the end of the file
-	// The advance of starting to read at the end of the file is that we can use the read position to determine the size of the file and allocate a buffer
-	std::ifstream file(fileName, std::ios::ate | std::ios::binary);
-
-	if (!file.is_open())
-	{
-		throw std::runtime_error("Failed to open file!");
-	}
-
-	size_t fileSize = (size_t)file.tellg();
-	std::vector<char> buffer(fileSize);
-
-	// After that, we can seek back to the beginning of the file and read all of the bytes at once
-	file.seekg(0);
-	file.read(buffer.data(), fileSize);
-
-	file.close();
-
-	return buffer;
-}
-
-VkShaderModule GetShaderModule(VkDevice device, const std::vector<char> &byteCode)
-{
-	VkShaderModuleCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-	createInfo.codeSize = byteCode.size();
-	createInfo.pCode = reinterpret_cast<const uint32_t*>(byteCode.data());
-
-	VkShaderModule shaderModule = VK_NULL_HANDLE;
-	VK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule));
-
-	return shaderModule;
-}
-
-VkRenderPass GetRenderPass(VkDevice device)
+VkRenderPass GetRenderPass(VkDevice device, VkFormat format)
 {
 	// Attachment description
 	VkAttachmentDescription colorAttachment{};
-	colorAttachment.format = g_Format;
+	colorAttachment.format = format;
 	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
 	// The `loadOp` and `storeOp` determine what to do with the data in the attachment before rendering and after rendering.
 	// * LOAD: Preserve the existing contents of the attachments
@@ -1204,10 +1170,10 @@ VkRenderPass GetRenderPass(VkDevice device)
 
 struct GraphicsPipelineDetails
 {
-	VkShaderModule vertexShader;
-	VkShaderModule meshShader;
-	VkShaderModule taskShader;
-	VkShaderModule fragmentShader;
+	VkShaderModule vertexShader = VK_NULL_HANDLE;
+	VkShaderModule meshShader = VK_NULL_HANDLE;
+	VkShaderModule taskShader = VK_NULL_HANDLE;
+	VkShaderModule fragmentShader = VK_NULL_HANDLE;
 
 	VkRenderPass renderPass;
 	VkPipelineLayout layout;
@@ -1218,10 +1184,10 @@ struct GraphicsPipelineDetails
 
 	void Cleanup(VkDevice device)
 	{
-		vkDestroyShaderModule(device, vertexShader, nullptr);
-		vkDestroyShaderModule(device, taskShader, nullptr);
-		vkDestroyShaderModule(device, meshShader, nullptr);
-		vkDestroyShaderModule(device, fragmentShader, nullptr);
+		if (vertexShader) vkDestroyShaderModule(device, vertexShader, nullptr);
+		if (taskShader) vkDestroyShaderModule(device, taskShader, nullptr);
+		if (meshShader) vkDestroyShaderModule(device, meshShader, nullptr);
+		if (fragmentShader) vkDestroyShaderModule(device, fragmentShader, nullptr);
 
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyPipelineLayout(device, layout, nullptr);
@@ -1332,20 +1298,16 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
 #if USE_MESHLETS
-	auto meshShader = ReadFile("./CompiledShaders/SimpleMesh.mesh.spv");
-	pipeline.meshShader = GetShaderModule(device, meshShader);
+	pipeline.meshShader = Niagara::Shader::LoadShader(device, "./CompiledShaders/SimpleMesh.mesh.spv");
 #else
-	auto vertShader = ReadFile("./CompiledShaders/SimpleMesh.vert.spv");
-	pipeline.vertexShader = GetShaderModule(device, vertShader);
+	pipeline.vertexShader = Niagara::Shader::LoadShader(device, "./CompiledShaders/SimpleMesh.vert.spv");
 #endif
-	auto fragShader = ReadFile("./CompiledShaders/SimpleMesh.frag.spv");
+	pipeline.fragmentShader = Niagara::Shader::LoadShader(device, "./CompiledShaders/SimpleMesh.frag.spv");
 
 #else
-	auto vertShader = ReadFile("./CompiledShaders/SimpleTriangle.vert.spv");
-	auto fragShader = ReadFile("./CompiledShaders/SimpleTriangle.frag.spv");
+	pipeline.vertexShader = Niagara::LoadShader(device, "./CompiledShaders/SimpleTriangle.vert.spv");
+	pipeline.fragmentShader = Niagara::LoadShader(device, "./CompiledShaders/SimpleTriangle.frag.spv");
 #endif
-	
-	pipeline.fragmentShader = GetShaderModule(device, fragShader);
 
 	VkPipelineShaderStageCreateInfo shaderStages[2] = {};
 
@@ -1516,7 +1478,7 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 
 #pragma endregion
 
-void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, const std::vector<VkImageView> &swapChainImageViews, VkRenderPass renderPass)
+void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, const std::vector<VkImageView> &swapChainImageViews, const VkExtent2D &size, VkRenderPass renderPass)
 {
 	framebuffers.resize(swapChainImageViews.size());
 
@@ -1524,8 +1486,8 @@ void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, 
 	createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	createInfo.renderPass = renderPass;
 	createInfo.attachmentCount = 1;
-	createInfo.width = g_ViewportExtent.width;
-	createInfo.height = g_ViewportExtent.height;
+	createInfo.width = size.width;
+	createInfo.height = size.height;
 	createInfo.layers = 1;
 	
 	for (size_t i = 0; i < swapChainImageViews.size(); ++i)
@@ -1569,7 +1531,7 @@ VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool)
 }
 
 void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pipelineDetails,
-	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh)
+	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh, const VkExtent2D &viewportExtent)
 {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1585,7 +1547,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 	renderPassInfo.framebuffer = framebuffers[imageIndex];
 
 	renderPassInfo.renderArea.offset = {0, 0};
-	renderPassInfo.renderArea.extent = g_ViewportExtent;
+	renderPassInfo.renderArea.extent = viewportExtent;
 
 	VkClearValue clearColor;
 	clearColor.color = { 0.2f, 0.2f, 0.6f, 1.0f };
@@ -1666,14 +1628,14 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 #if !FLIP_VIEWPORT
 	viewport.x = 0.0f;
 	viewport.y = 0.0f;
-	viewport.width = static_cast<float>(g_ViewportExtent.width);
-	viewport.height = static_cast<float>(g_ViewportExtent.height);
+	viewport.width = static_cast<float>(viewportExtend.width);
+	viewport.height = static_cast<float>(viewportExtend.height);
 #else
 	// VK_CULL_MODE_NONE
 	viewport.x = 0.0f;
-	viewport.y = static_cast<float>(g_ViewportExtent.height);
-	viewport.width = static_cast<float>(g_ViewportExtent.width);
-	viewport.height = -static_cast<float>(g_ViewportExtent.height);
+	viewport.y = static_cast<float>(viewportExtent.height);
+	viewport.width = static_cast<float>(viewportExtent.width);
+	viewport.height = -static_cast<float>(viewportExtent.height);
 #endif
 	viewport.minDepth = 0.0f;
 	viewport.maxDepth = 1.0f;
@@ -1681,7 +1643,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 
 	VkRect2D scissor{};
 	scissor.offset = {0, 0};
-	scissor.extent = g_ViewportExtent;
+	scissor.extent = viewportExtent;
 	vkCmdSetScissor(cmd, 0, 1, &scissor);
 
 #if DRAW_MODE == DRAW_SIMPLE_MESH
@@ -1723,6 +1685,30 @@ struct SyncObjects
 	}
 };
 
+VkSemaphore GetSemaphore(VkDevice device)
+{
+	VkSemaphoreCreateInfo createInfo{};
+	createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+	VkSemaphore semaphore = VK_NULL_HANDLE;
+	VK_CHECK(vkCreateSemaphore(device, &createInfo, nullptr, &semaphore));
+
+	return semaphore;
+}
+
+VkFence GetFence(VkDevice device, VkFenceCreateFlags flags = VK_FENCE_CREATE_SIGNALED_BIT)
+{
+	VkFenceCreateInfo createInfo{};
+	createInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	// Create the fence in the signaled state, so the first call to `vkWaitForFences()` returns immediately since the fence is already signaled
+	createInfo.flags = flags;
+
+	VkFence fence = VK_NULL_HANDLE;
+	VK_CHECK(vkCreateFence(device, &createInfo, nullptr, &fence));
+
+	return fence;
+}
+
 SyncObjects GetSyncObjects(VkDevice device)
 {
 	SyncObjects syncObjects{};
@@ -1736,11 +1722,7 @@ SyncObjects GetSyncObjects(VkDevice device)
 	}
 
 	{
-		VkFenceCreateInfo createInfo{};
-		createInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-		// Create the fence in the signaled state, so the first call to `vkWaitForFences()` returns immediately since the fence is already signaled
-		createInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-		VK_CHECK(vkCreateFence(device, &createInfo, nullptr, &syncObjects.inFlightFence));
+		syncObjects.inFlightFence = GetFence(device);
 	}
 
 	return syncObjects;
@@ -1799,7 +1781,7 @@ void GetSwapChain(VkDevice device, VkSwapchainKHR &swapChain,
 	GetImageViews(device, swapChainImageViews, swapChainImages, info.surfaceFormat.format);
 	assert(!swapChainImageViews.empty());
 
-	GetFramebuffers(device, framebuffers, swapChainImageViews, renderPass);
+	GetFramebuffers(device, framebuffers, swapChainImageViews, info.extent, renderPass);
 	assert(!framebuffers.empty());
 }
 
@@ -1820,13 +1802,13 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 
 /// Main
 
-void Render(VkDevice device, VkSwapchainKHR &swapChain, SyncObjects &syncObjects, uint32_t imageIndex,
+void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex,
 	VkCommandBuffer cmd, const GraphicsPipelineDetails& pipelineDetails, VkQueue graphicsQueue,
-	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh)
+	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh, const VkExtent2D &viewportExtend)
 {
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
- 	RecordCommandBuffer(cmd, pipelineDetails, framebuffers, bufferMgr, imageIndex, mesh);
+ 	RecordCommandBuffer(cmd, pipelineDetails, framebuffers, bufferMgr, imageIndex, mesh, viewportExtend);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -2137,34 +2119,26 @@ int main()
 
 	volkLoadDevice(device);
 
-	g_CommandMgr.Init(device);
+	Niagara::Swapchain swapchain{};
+	swapchain.Init(instance, device, window);
 
-	VkSurfaceKHR surface = GetWindowSurface(instance, window);
-	assert(surface);
+	g_CommandMgr.Init(device);
 
 	// Retrieving queue handles
 	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
 	assert(graphicsQueue);
 
-	// Update swap chain surface format & extent
-	SwapChainInfo swapChainInfo = GetSwapChainInfo(device.physicalDevice, surface, window);
-
 	// Need swap chain surface format
-	VkRenderPass renderPass = GetRenderPass(device);
+	VkRenderPass renderPass = GetRenderPass(device, swapchain.colorFormat);
 	assert(renderPass);
 
-	VkSwapchainKHR swapChain = VK_NULL_HANDLE;
-	std::vector<VkImage> swapChainImages;
-	std::vector<VkImageView> swapChainImageViews;
 	std::vector<VkFramebuffer> framebuffers;
+	GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
 	
-	GetSwapChain(device, swapChain, swapChainImages, swapChainImageViews, framebuffers,
-		surface, renderPass, swapChainInfo);
-
 	// Pipeline
 	GraphicsPipelineDetails pipelineDetails{};
 	pipelineDetails.renderPass = renderPass;
-	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, swapChainInfo.extent);
+	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, swapchain.extent);
 	assert(graphicsPipeline);
 	pipelineDetails.pipeline = graphicsPipeline;
 
@@ -2264,12 +2238,24 @@ int main()
 		vkWaitForFences(device, 1, &currentSyncObjects.inFlightFence, VK_TRUE, UINT64_MAX);
 		
 		uint32_t imageIndex = 0;
-		VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, currentSyncObjects.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+		VkResult result = swapchain.AcquireNextImage(device, currentSyncObjects.imageAvailableSemaphore, &imageIndex);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || g_FramebufferResized)
 		{
-			swapChainInfo = GetSwapChainInfo(device.physicalDevice, surface, window);
-			GetSwapChain(device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
-			assert(swapChain);
+			vkDeviceWaitIdle(device);
+
+			// Recreate swapchain
+			swapchain.UpdateSwapchain(device, window, false);
+
+			// Recreate framebuffers
+			for (auto &framebuffer : framebuffers)
+				vkDestroyFramebuffer(device, framebuffer, nullptr);
+			GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
+
+			// Recreate semaphores
+			vkDestroySemaphore(device, currentSyncObjects.imageAvailableSemaphore, nullptr);
+			currentSyncObjects.imageAvailableSemaphore = GetSemaphore(device);
+			assert(currentSyncObjects.imageAvailableSemaphore);
+
 			g_FramebufferResized = false;
 			continue;
 		}
@@ -2277,28 +2263,23 @@ int main()
 		// Only reset the fence if we are submitting work
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
-		Render(device, swapChain, currentSyncObjects, imageIndex,
-			currentCommandBuffer, pipelineDetails, graphicsQueue, framebuffers, bufferMgr, mesh);
+		Render(device, currentSyncObjects, imageIndex,
+			currentCommandBuffer, pipelineDetails, graphicsQueue, framebuffers, bufferMgr, mesh, swapchain.extent);
 
 		// Present
+		result = swapchain.QueuePresent(graphicsQueue, imageIndex, currentSyncObjects.renderFinishedSemaphore);
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || g_FramebufferResized)
 		{
-			VkSwapchainKHR presentSwapChains[] = { swapChain };
-			VkPresentInfoKHR presentInfo{};
-			presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-			presentInfo.pSwapchains = presentSwapChains;
-			presentInfo.swapchainCount = ARRAYSIZE(presentSwapChains);
-			presentInfo.pWaitSemaphores = &currentSyncObjects.renderFinishedSemaphore;
-			presentInfo.waitSemaphoreCount = 1;
-			presentInfo.pImageIndices = &imageIndex;
+			vkDeviceWaitIdle(device);
 
-			result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
-			if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || g_FramebufferResized)
-			{
-				swapChainInfo = GetSwapChainInfo(device.physicalDevice, surface, window);
-				GetSwapChain(device, swapChain, swapChainImages, swapChainImageViews, framebuffers, surface, renderPass, swapChainInfo);
-				assert(swapChain);
-				g_FramebufferResized = false;
-			}
+			swapchain.UpdateSwapchain(device, window, false);
+
+			for (auto& framebuffer : framebuffers)
+				vkDestroyFramebuffer(device, framebuffer, nullptr);
+			GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
+
+			g_FramebufferResized = false;
+			continue;
 		}
 
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -2326,22 +2307,24 @@ int main()
 
 	vkDestroyQueryPool(device, queryPool, nullptr);
 
-	bufferMgr.Cleanup(device);
-
 	for (auto &frameResource : frameResources)
 	{
 		frameResource.Cleanup(device);
 	}
-	CleanupSwapChain(device, swapChain, swapChainImageViews, framebuffers);
-
-	syncObjects.Cleanup(device);
 	
+	syncObjects.Cleanup(device);
+
+	for (auto &framebuffer : framebuffers)
+		vkDestroyFramebuffer(device, framebuffer, nullptr);
+	
+	bufferMgr.Cleanup(device);
+
 	// Pipeline
 	pipelineDetails.Cleanup(device);
 
-	vkDestroySurfaceKHR(instance, surface, nullptr);
-
 	g_CommandMgr.Cleanup(device);
+
+	swapchain.Destroy(device);
 
 	device.Destroy();
 	

@@ -184,7 +184,9 @@
     <ClCompile Include="..\External\volk\volk.c" />
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="SwapChain.cpp" />
+    <ClCompile Include="Shaders.cpp" />
+    <ClCompile Include="Swapchain.cpp" />
+    <ClCompile Include="Utilities.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h" />
@@ -196,7 +198,9 @@
     <ClInclude Include="..\External\volk\volk.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="pch.h" />
-    <ClInclude Include="SwapChain.h" />
+    <ClInclude Include="Shaders.h" />
+    <ClInclude Include="Swapchain.h" />
+    <ClInclude Include="Utilities.h" />
     <ClInclude Include="VkInitializers.h" />
   </ItemGroup>
   <ItemGroup>

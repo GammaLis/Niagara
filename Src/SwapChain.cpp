@@ -8,7 +8,7 @@
 * This code is licensed under the MIT license (MIT) (http://opensource.org/licenses/MIT)
 */
 
-#include "SwapChain.h"
+#include "Swapchain.h"
 #include "Device.h"
 
 #include <GLFW/glfw3.h>
@@ -120,7 +120,7 @@ namespace Niagara
 		return info;
 	}
 
-	VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, const SwapChainInfo& info)
+	VkSwapchainKHR GetSwapchain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, const SwapChainInfo& info)
 	{
 		VkSurfaceFormatKHR surfaceFormat = info.surfaceFormat;
 		VkPresentModeKHR presentMode = info.presentMode;
@@ -191,26 +191,27 @@ namespace Niagara
 
 
 	// SwapChain
-	void SwapChain::Init(VkInstance instance, const Device& device, void* platformHandle, void* platformWindow)
+	void Swapchain::Init(VkInstance instance, const Device& device, GLFWwindow* window)
 	{
 		this->instance = instance;
 
-		InitSurface(instance, device, platformHandle, platformWindow);
+		InitSurface(instance, device, window);
 
-		// TODO...
+		UpdateSwapchain(device, window, false);
 	}
 
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-	void SwapChain::InitSurface(VkInstance instance, const Device &device, void* platformHandle, void* platformWindow)
+	void Swapchain::InitSurface(VkInstance instance, const Device &device, GLFWwindow *window)
 	{
-		VkResult err = VK_SUCCESS;
-
 		// Create the os-specific surface
+#if 0
 		VkWin32SurfaceCreateInfoKHR surfaceCreateInfo{};
 		surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-		surfaceCreateInfo.hinstance = (HINSTANCE)platformHandle;
-		surfaceCreateInfo.hwnd = (HWND)platformWindow;
+		surfaceCreateInfo.hwnd = (HWND)glfwGetWin32Window(window);
+		surfaceCreateInfo.hinstance = GetModuleHandle(nullptr);
 		VK_CHECK(vkCreateWin32SurfaceKHR(instance, &surfaceCreateInfo, nullptr, &surface));
+#else
+		VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
+#endif
 
 		// Default graphics queue supports presentation
 		queueNodeIndex = device.queueFamilyIndices.graphics;
@@ -225,39 +226,40 @@ namespace Niagara
 
 		// If the surface format list only includes one entry with VK_FORMAT_UNDEFINED,
 		// there is no preferred format, so we assume VK_FORMAT_B8G8R8A8_UNORM
+		const VkFormat preferredFormat = VK_FORMAT_B8G8R8A8_SRGB; // VK_FORMAT_B8G8R8A8_SRGB VK_FORMAT_B8G8R8A8_UNORM
+		const VkColorSpaceKHR preferredColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 		if ((formatCount == 1) && (surfaceFormats[0].format == VK_FORMAT_UNDEFINED))
 		{
-			colorFormat = VK_FORMAT_B8G8R8A8_UNORM;
+			colorFormat = preferredFormat;
 			colorSpace = surfaceFormats[0].colorSpace;
 		}
 		else
 		{
 			// Iterate over the list of available surface format and 
 			// check for the presence of VK_FORMAT_B8G8R8A8_UNORM
-			bool bFoundB8G8R8A8_UNORM = false;
+			bool bFoundPreferred = false;
 			for (auto&& surfaceFormat : surfaceFormats)
 			{
-				if (surfaceFormat.format == VK_FORMAT_B8G8R8A8_UNORM)
+				if (surfaceFormat.format == preferredFormat)
 				{
 					colorFormat = surfaceFormat.format;
 					colorSpace = surfaceFormat.colorSpace;
-					bFoundB8G8R8A8_UNORM = true;
+					bFoundPreferred = true;
 					break;
 				}
 			}
 
 			// in case VK_FORMAT_B8G8R8A8_UNORM is not available, select the first available color format
-			if (bFoundB8G8R8A8_UNORM)
+			if (!bFoundPreferred)
 			{
 				colorFormat = surfaceFormats[0].format;
 				colorSpace = surfaceFormats[0].colorSpace;
 			}
 		}
 	}
-#endif
 
 	// Update the swap chain and get its images with given width and height
-	void SwapChain::UpdateSwapChain(const Device &device, void *window, uint32_t& width, uint32_t& height, bool bVsync, bool bFullscreen)
+	void Swapchain::UpdateSwapchain(const Device &device, GLFWwindow *window, bool bVsync, bool bFullscreen)
 	{
 		auto physicalDevice = device.physicalDevice;
 
@@ -268,6 +270,19 @@ namespace Niagara
 		VkSurfaceCapabilitiesKHR surfCaps;
 		VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfCaps));
 
+		VkExtent2D swapchainExtent = ChooseSwapExtent(surfCaps, window);
+		// Handling minimization
+		while (swapchainExtent.width == 0 || swapchainExtent.height == 0)
+		{
+			glfwWaitEvents();
+
+			VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfCaps));
+			swapchainExtent = ChooseSwapExtent(surfCaps, window);
+		}
+		extent = swapchainExtent;
+
+		// Present mode
+
 		// Get available present modes
 		uint32_t presentModeCount;
 		VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr));
@@ -275,28 +290,6 @@ namespace Niagara
 
 		std::vector<VkPresentModeKHR> presentModes(presentModeCount);
 		VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data()));
-
-		VkExtent2D swapchainExtent{};
-		// If width & height equals the special value 0xFFFFFFFF, the size of the surface will be set by the swapchain
-		if (surfCaps.currentExtent.width == (uint32_t)-1)
-		{
-			// If the surface is undefined, the size is set to the size of the images requested
-
-			int width, height;
-			glfwGetFramebufferSize((GLFWwindow*)window, &width, &height);
-
-			width = std::clamp(static_cast<uint32_t>(width), surfCaps.minImageExtent.width, surfCaps.maxImageExtent.width);
-			height = std::clamp(static_cast<uint32_t>(height), surfCaps.minImageExtent.height, surfCaps.maxImageExtent.height);
-
-			swapchainExtent.width = width;
-			swapchainExtent.height = height;
-		}
-		else
-		{
-			// If the surface size is defined, the swapchain size must match
-			swapchainExtent = surfCaps.currentExtent;
-		}
-		extent = swapchainExtent;
 
 		// Select a present mode for the swapchain
 
@@ -340,7 +333,8 @@ namespace Niagara
 		// Find a supported composite alpha format (not all devices support alpha opaque)
 		VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		// Simply select the first composite alpha format available
-		const std::vector<VkCompositeAlphaFlagBitsKHR> compositeAlphaFlags = {
+		const std::vector<VkCompositeAlphaFlagBitsKHR> compositeAlphaFlags = 
+		{
 			VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
 			VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
 			VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
@@ -380,9 +374,8 @@ namespace Niagara
 			createInfo.imageUsage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 		// Enable transfer destination on swap chain images if supported
-		if (surfCaps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
+		if (surfCaps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
 			createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		}
 
 		VK_CHECK(vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapchain));
 
@@ -407,15 +400,15 @@ namespace Niagara
 	}
 
 	// Acquire the next image in the swapchain
-	VkResult SwapChain::AcquireNextImage(const Device &device, VkSemaphore presentCompleteSemaphore, uint32_t* imageIndex)
+	VkResult Swapchain::AcquireNextImage(const Device &device, VkSemaphore presentCompleteSemaphore, uint32_t* imageIndex)
 	{
 		// By setting timeout to UINT64_MAX we will always wait until the next image has been acquired or an actual error is thrown
 		// With that we don't have to handle VK_NOT_READY
-		return vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, presentCompleteSemaphore, (VkFence)nullptr, imageIndex);
+		return vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, presentCompleteSemaphore, VK_NULL_HANDLE, imageIndex);
 	}
 
 	// Queue an image for presentation
-	VkResult SwapChain::QueuePresent(VkQueue queue, uint32_t imageIndex, VkSemaphore waitSemaphore)
+	VkResult Swapchain::QueuePresent(VkQueue queue, uint32_t imageIndex, VkSemaphore waitSemaphore)
 	{
 		VkPresentInfoKHR presentInfo{};
 		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -433,7 +426,7 @@ namespace Niagara
 	}
 
 	// Destroy and free Vulkan resources used for the swapchain
-	void SwapChain::Destroy(const Device &device)
+	void Swapchain::Destroy(const Device &device)
 	{
 		if (swapchain != VK_NULL_HANDLE)
 		{
@@ -448,7 +441,7 @@ namespace Niagara
 		}
 	}
 
-	void SwapChain::CreateImageViews(const Device& device)
+	void Swapchain::CreateImageViews(const Device& device)
 	{
 		imageViews.resize(imageCount);
 		VkImageViewCreateInfo imageViewCreateInfo{};

@@ -217,7 +217,7 @@ namespace Niagara
 
 		if (physicalDevice)
 		{
-			std::cout << "Select GPU: " << props.deviceName << " .\n ";
+			std::cout << "Used GPU: " << props.deviceName << " .\n ";
 		}
 
 		return physicalDevice;
@@ -228,6 +228,8 @@ namespace Niagara
 
 	bool Device::Init(VkInstance instance, VkPhysicalDeviceFeatures enabledFeatures, const std::vector<const char*>& enabledExtensions, void* pNextChain, bool bUseSwapChain, VkQueueFlags requestedQueueTypes)
 	{
+		this->instance = instance;
+
 		physicalDevice = CreatePhysicalDevice(instance);
 		if (!physicalDevice)
 		{

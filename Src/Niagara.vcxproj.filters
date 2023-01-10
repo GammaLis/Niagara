@@ -144,10 +144,16 @@
     <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp">
       <Filter>meshoptimizer</Filter>
     </ClCompile>
-    <ClCompile Include="SwapChain.cpp">
+    <ClCompile Include="Device.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="Device.cpp">
+    <ClCompile Include="Utilities.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Swapchain.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Shaders.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
@@ -176,13 +182,19 @@
     <ClInclude Include="pch.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="SwapChain.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="Device.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="VkInitializers.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Shaders.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Swapchain.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

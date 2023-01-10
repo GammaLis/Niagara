@@ -31,7 +31,7 @@ namespace Niagara
 	VkSwapchainKHR GetSwapChain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, const SwapChainInfo& info);
 	void GetSwapChainImages(VkDevice device, std::vector<VkImage>& swapChainImages, VkSwapchainKHR swapChain);
 
-	class SwapChain
+	class Swapchain
 	{
 	private:
 		VkInstance instance;
@@ -47,13 +47,13 @@ namespace Niagara
 		std::vector<VkImageView> imageViews;
 		uint32_t queueNodeIndex = UINT32_MAX;
 
-		void Init(VkInstance instance, const Device& device, void* platformHandle, void* platformWindow);
+		void Init(VkInstance instance, const Device& device, GLFWwindow* window);
 		void Destroy(const Device& device);
 
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-		void InitSurface(VkInstance instance, const Device &device, void* platformHandle, void* platformWindow);
-#endif
-		void UpdateSwapChain(const Device &device, void *window, uint32_t& width, uint32_t& height, bool bVsync, bool bFullscreen);
+		void InitSurface(VkInstance instance, const Device &device, GLFWwindow *window);
+		void UpdateSwapchain(const Device &device, GLFWwindow *window, bool bVsync = true, bool bFullscreen = false);
+
+		operator VkSwapchainKHR() const { return swapchain; }
 
 		VkResult AcquireNextImage(const Device &device, VkSemaphore presentCompleteSemaphore, uint32_t* imageIndex);
 		VkResult QueuePresent(VkQueue queue, uint32_t imageIndex, VkSemaphore waitSemaphore = VK_NULL_HANDLE);
