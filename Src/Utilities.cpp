@@ -1,6 +1,4 @@
 #include "Utilities.h"
-#include <spirv_cross/spirv.h>
-#include <spirv-headers/spirv.h>
 #include <fstream>
 
 namespace Niagara
@@ -27,26 +25,5 @@ namespace Niagara
 
 		return buffer;
 	}
-
-	void ParseShader(const uint32_t* code, uint32_t codeSize)
-	{
-		assert(code[0] == SpvMagicNumber);
-
-		uint32_t idBound = code[3];
-	}
-
-	VkShaderModule LoadShader(VkDevice device, const std::string& fileName)
-	{
-		std::vector<char> byteCode = ReadFile(fileName);
-
-		VkShaderModuleCreateInfo createInfo{};
-		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-		createInfo.codeSize = byteCode.size();
-		createInfo.pCode = reinterpret_cast<const uint32_t*>(byteCode.data());
-
-		VkShaderModule shaderModule = VK_NULL_HANDLE;
-		VK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule));
-
-		return shaderModule;
-	}
+	
 }

@@ -8,7 +8,7 @@
 
 namespace Niagara
 {
-	VkShaderModule Shader::LoadShader(VkDevice device, const std::string& fileName)
+	VkShaderModule LoadShader(VkDevice device, const std::string& fileName)
 	{
 		std::vector<char> byteCode = ReadFile(fileName);
 
@@ -176,8 +176,8 @@ namespace Niagara
 
 				assert(idArray[id].opCode == 0);
 				idArray[id].opCode = opCode;
-				idArray[id].typeId = instruction[3];
 				idArray[id].storageClass = instruction[2];
+				idArray[id].typeId = instruction[3];
 
 				break;
 			}
@@ -207,7 +207,7 @@ namespace Niagara
 				idArray[id].typeId = instruction[1];
 				idArray[id].storageClass = instruction[3];
 
-				break;	
+				break;
 			}
 
 			}
@@ -260,4 +260,128 @@ namespace Niagara
 
 		return true;
 	}
+
+	uint32_t Shader::GatherResources(const std::vector<Shader*> &shaders, VkDescriptorType (&resourceTypes)[32])
+	{
+		uint32_t resourceMask = 0;
+
+		for (const auto &shader : shaders)
+		{
+			for (uint32_t i = 0; i < 32; ++i)
+			{
+				if (shader->resourceMask & (1 << i))
+				{
+					if (resourceMask & (1 << i))
+						assert(resourceTypes[i] == shader->resourceTypes[i]);
+					else
+					{
+						resourceTypes[i] = shader->resourceTypes[i];
+						resourceMask |= 1 << i;
+					}
+				}
+			}
+		}
+
+		return resourceMask;
+	}
+
+	std::vector<VkDescriptorSetLayoutBinding> Shader::GetSetBindings(const std::vector<Shader*> &shaders, VkDescriptorType resourceTypes[], uint32_t resourceMask)
+	{
+		std::vector<VkDescriptorSetLayoutBinding> setBindings;
+
+		VkDescriptorType tempResourceTypes[32] = {};
+		if (resourceTypes == nullptr)
+		{
+			resourceMask = GatherResources(shaders, tempResourceTypes);
+			resourceTypes = tempResourceTypes;
+		}
+
+		for (uint32_t i = 0; i < 32; ++i)
+		{
+			if (resourceMask & (1 << i))
+			{
+				VkDescriptorSetLayoutBinding setBinding{};
+				setBinding.binding = i;
+				setBinding.descriptorType = resourceTypes[i];
+				setBinding.descriptorCount = 1;
+
+				setBinding.stageFlags = 0;
+				for (const auto& shader : shaders)
+				{
+					if (shader->resourceMask & (1 << i))
+						setBinding.stageFlags |= shader->stage;
+				}
+
+				setBindings.push_back(setBinding);
+			}
+		}
+
+		return setBindings;
+	}
+
+	VkDescriptorSetLayout Shader::CreateDescriptorSetLayout(VkDevice device, const std::vector<Shader*> &shaders, bool pushDescriptorsSupported)
+	{
+		std::vector<VkDescriptorSetLayoutBinding> setBindings = GetSetBindings(shaders);
+
+		VkDescriptorSetLayoutCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		createInfo.pBindings = setBindings.data();
+		createInfo.bindingCount = static_cast<uint32_t>(setBindings.size());
+		createInfo.flags = pushDescriptorsSupported ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+
+		VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &setLayout));
+
+		return setLayout;
+	}
+
+	std::vector<VkDescriptorUpdateTemplateEntry> Shader::GetUpdateTemplateEntries(const std::vector<Shader*>& shaders, VkDescriptorType resourceTypes[], uint32_t resourceMask)
+	{
+		std::vector<VkDescriptorUpdateTemplateEntry> entries;
+
+		VkDescriptorType tempResourceTypes[32] = {};
+		if (resourceTypes == nullptr)
+		{
+			resourceMask = GatherResources(shaders, tempResourceTypes);
+			resourceTypes = tempResourceTypes;
+		}
+
+		for (uint32_t i = 0; i < 32; ++i)
+		{
+			if (resourceMask & (1 << i))
+			{
+				VkDescriptorUpdateTemplateEntry entry{};
+				entry.dstBinding = i;
+				entry.descriptorType = resourceTypes[i];
+				entry.descriptorCount = 1;
+				entry.dstArrayElement = 0;
+				entry.stride = sizeof(DescriptorInfo);
+				entry.offset = entry.stride * i;
+				
+				entries.push_back(entry);
+			}
+		}
+
+		return entries;
+	}
+
+	VkDescriptorUpdateTemplate Shader::CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, VkDescriptorSetLayout setLayout, const std::vector<Shader*> &shaders, bool pushDescriptorsSupported)
+	{
+		std::vector<VkDescriptorUpdateTemplateEntry> entries = GetUpdateTemplateEntries(shaders);
+
+		VkDescriptorUpdateTemplateCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+		createInfo.pDescriptorUpdateEntries = entries.data();
+		createInfo.descriptorUpdateEntryCount = static_cast<uint32_t>(entries.size());
+		createInfo.templateType = pushDescriptorsSupported ? VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR : VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+		createInfo.descriptorSetLayout = pushDescriptorsSupported ? nullptr : setLayout;
+		createInfo.pipelineLayout = layout;
+		createInfo.pipelineBindPoint = bindPoint;
+
+		VkDescriptorUpdateTemplate updateTemplate = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateDescriptorUpdateTemplate(device, &createInfo, nullptr, &updateTemplate));
+
+		return updateTemplate;
+	}
+
 }

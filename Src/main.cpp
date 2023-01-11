@@ -396,28 +396,6 @@ struct BufferManager
 	}
 };
 
-struct DescriptorInfo 
-{
-	union 
-	{
-		VkDescriptorBufferInfo bufferInfo;
-		VkDescriptorImageInfo imageInfo;
-	};
-
-	DescriptorInfo(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize range = VK_WHOLE_SIZE)
-	{
-		bufferInfo.buffer = buffer;
-		bufferInfo.offset = offset;
-		bufferInfo.range = range;
-	}
-	DescriptorInfo(VkSampler sampler, VkImageView imageView, VkImageLayout imageLayout)
-	{
-		imageInfo.sampler = sampler;
-		imageInfo.imageView = imageView;
-		imageInfo.imageLayout = imageLayout;
-	}
-};
-
 
 /**
 * What it takes to draw a triangle
@@ -1170,24 +1148,160 @@ VkRenderPass GetRenderPass(VkDevice device, VkFormat format)
 
 struct GraphicsPipelineDetails
 {
-	VkShaderModule vertexShader = VK_NULL_HANDLE;
-	VkShaderModule meshShader = VK_NULL_HANDLE;
-	VkShaderModule taskShader = VK_NULL_HANDLE;
-	VkShaderModule fragmentShader = VK_NULL_HANDLE;
+	using Shader = Niagara::Shader;
+
+	Shader vertShader;
+	Shader taskShader;
+	Shader meshShader;
+	Shader fragShader;
+
+	// Descritpors
+	uint32_t resourceNum = 0;
+	uint32_t resourceMask = 0;
+	VkDescriptorType resourceTypes[32];
+
+	// Niagara::DescriptorInfo resourceInfos[32];
+	// VkWriteDescriptorSet resourceSets[32];
 
 	VkRenderPass renderPass;
-	VkPipelineLayout layout;
-	VkDescriptorUpdateTemplate descriptorUpdateTemplate;
-	VkPipeline pipeline;
 
 	std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
+	VkDescriptorUpdateTemplate descriptorUpdateTemplate;
+	VkPipelineLayout layout;
+	VkPipeline pipeline;
+
+	std::vector<Shader*> GetPipelineShaders()
+	{
+		return { &vertShader, &taskShader, &meshShader, &fragShader };
+	}
+
+	std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo()
+	{
+		std::vector<VkPipelineShaderStageCreateInfo> shaderStagesCreateInfo;
+
+		VkPipelineShaderStageCreateInfo shaderStageCreateInfo{};
+		shaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		shaderStageCreateInfo.pName = "main";
+
+		auto shaders = GetPipelineShaders();
+		for (const auto& shader : shaders)
+		{
+			if (shader->module != VK_NULL_HANDLE)
+			{
+				shaderStageCreateInfo.module = shader->module;
+				shaderStageCreateInfo.stage = shader->stage;
+
+				shaderStagesCreateInfo.push_back(shaderStageCreateInfo);
+			}
+		}
+
+		return shaderStagesCreateInfo;
+	}
+
+	void GatherResource()
+	{
+		auto shaders = GetPipelineShaders();
+
+		resourceNum = 0;
+		resourceMask = 0;
+		for (const auto& shader : shaders)
+		{
+			for (uint32_t i = 0; i < 32; ++i)
+			{
+				if (shader->resourceMask & (1 << i))
+				{
+					if (resourceMask & (1 << i))
+						assert(resourceTypes[i] == shader->resourceTypes[i]);
+					else
+					{
+						resourceTypes[i] = shader->resourceTypes[i];
+						resourceMask |= 1 << i;
+					}
+					++resourceNum;
+				}
+			}
+		}		
+	}
+
+	VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported = true)
+	{
+		auto shaders = GetPipelineShaders();
+
+		std::vector<VkDescriptorSetLayoutBinding> setBindings = Shader::GetSetBindings(shaders, resourceTypes, resourceMask);
+
+		VkDescriptorSetLayoutCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		createInfo.pBindings = setBindings.data();
+		createInfo.bindingCount = static_cast<uint32_t>(setBindings.size());
+		createInfo.flags = pushDescriptorsSupported ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+
+		VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &setLayout));
+		assert(setLayout);
+
+		descriptorSetLayouts.push_back(setLayout);
+
+		return setLayout;
+	}
+
+	VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setLayoutIndex = 0, bool pushDescriptorsSupported = true)
+	{
+		auto shaders = GetPipelineShaders();
+
+		std::vector<VkDescriptorUpdateTemplateEntry> entries = Shader::GetUpdateTemplateEntries(shaders);
+
+		VkDescriptorUpdateTemplateCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+		createInfo.pDescriptorUpdateEntries = entries.data();
+		createInfo.descriptorUpdateEntryCount = static_cast<uint32_t>(entries.size());
+		createInfo.templateType = pushDescriptorsSupported ? VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR : VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+		createInfo.descriptorSetLayout = pushDescriptorsSupported ? nullptr : descriptorSetLayouts[setLayoutIndex];
+		createInfo.pipelineLayout = layout;
+		createInfo.pipelineBindPoint = bindPoint;
+
+		VkDescriptorUpdateTemplate updateTemplate = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateDescriptorUpdateTemplate(device, &createInfo, nullptr, &updateTemplate));
+		assert(updateTemplate);
+
+		descriptorUpdateTemplate = updateTemplate;
+
+		return updateTemplate;
+	}
+
+	VkPipelineLayout CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported = true)
+	{
+		CreateDescriptorSetLayout(device, pushDescriptorSupported);
+
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
+		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		pipelineLayoutCreateInfo.setLayoutCount = 1;
+		pipelineLayoutCreateInfo.pSetLayouts = &descriptorSetLayouts.back();
+		pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
+		pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
+
+		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+		VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
+		assert(pipelineLayout);
+
+		layout = pipelineLayout;
+
+		return pipelineLayout;
+	}
+
+	void SetDescriptor(uint32_t index, const Niagara::DescriptorInfo &info)
+	{
+		assert(resourceMask & (1 << index));
+		// TODO:
+		// assert(resourceTypes[index] == buffer.Type)
+		// resourceInfos[index] = info;
+	}
 
 	void Cleanup(VkDevice device)
 	{
-		if (vertexShader) vkDestroyShaderModule(device, vertexShader, nullptr);
-		if (taskShader) vkDestroyShaderModule(device, taskShader, nullptr);
-		if (meshShader) vkDestroyShaderModule(device, meshShader, nullptr);
-		if (fragmentShader) vkDestroyShaderModule(device, fragmentShader, nullptr);
+		vertShader.Cleanup(device);
+		taskShader.Cleanup(device);
+		meshShader.Cleanup(device);
+		fragShader.Cleanup(device);
 
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyPipelineLayout(device, layout, nullptr);
@@ -1234,9 +1348,12 @@ VkDescriptorSetLayout GetDescriptorSetLayout(VkDevice device)
 	return setLayout;
 }
 
-VkPipelineLayout GetPipelineLayout(VkDevice device, GraphicsPipelineDetails& pipelineDetails)
+VkPipelineLayout GetPipelineLayout(VkDevice device, GraphicsPipelineDetails& pipelineDetails, bool pushDescriptorSupported = true)
 {
-	VkDescriptorSetLayout setLayout = GetDescriptorSetLayout(device);
+	VkDescriptorSetLayout setLayout = Niagara::Shader::CreateDescriptorSetLayout(
+		device, 
+		{&pipelineDetails.vertShader, &pipelineDetails.taskShader, &pipelineDetails.meshShader, &pipelineDetails.fragShader}, 
+		pushDescriptorSupported);
 	assert(setLayout);
 	pipelineDetails.descriptorSetLayouts.push_back(setLayout);
 
@@ -1265,7 +1382,7 @@ VkDescriptorUpdateTemplate GetDescriptorUpdateTemplate(VkDevice device, Graphics
 	templateEntry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	templateEntry.dstArrayElement = 0;
 	templateEntry.dstBinding = 0;
-	templateEntry.stride = sizeof(DescriptorInfo);
+	templateEntry.stride = sizeof(Niagara::DescriptorInfo);
 	templateEntry.offset = 0;
 	entries.push_back(templateEntry);
 
@@ -1274,7 +1391,7 @@ VkDescriptorUpdateTemplate GetDescriptorUpdateTemplate(VkDevice device, Graphics
 	templateEntry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	templateEntry.dstArrayElement = 0;
 	templateEntry.dstBinding = 1;
-	templateEntry.stride = sizeof(DescriptorInfo);
+	templateEntry.stride = sizeof(Niagara::DescriptorInfo);
 	templateEntry.offset = templateEntry.stride;
 	entries.push_back(templateEntry);
 #endif
@@ -1294,39 +1411,25 @@ VkDescriptorUpdateTemplate GetDescriptorUpdateTemplate(VkDevice device, Graphics
 	return descUpdateTemplate;
 }
 
-VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipeline, VkExtent2D viewportExtent)
+VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelineDetails, VkExtent2D viewportExtent, bool pushDescriptorSupported = true)
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
 #if USE_MESHLETS
-	pipeline.meshShader = Niagara::Shader::LoadShader(device, "./CompiledShaders/SimpleMesh.mesh.spv");
+	pipelineDetails.meshShader.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
 #else
-	pipeline.vertexShader = Niagara::Shader::LoadShader(device, "./CompiledShaders/SimpleMesh.vert.spv");
+	pipelineDetails.vertShader.Load(device, "./CompiledShaders/SimpleMesh.vert.spv");
 #endif
-	pipeline.fragmentShader = Niagara::Shader::LoadShader(device, "./CompiledShaders/SimpleMesh.frag.spv");
+	pipelineDetails.fragShader.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
 
 #else
-	pipeline.vertexShader = Niagara::LoadShader(device, "./CompiledShaders/SimpleTriangle.vert.spv");
-	pipeline.fragmentShader = Niagara::LoadShader(device, "./CompiledShaders/SimpleTriangle.frag.spv");
+	pipelineDetails.vertShader.Load(device, "./CompiledShaders/SimpleTriangle.vert.spv");
+	pipelineDetails.fragShader.Load(device, "./CompiledShaders/SimpleTriangle.frag.spv");
 #endif
 
-	VkPipelineShaderStageCreateInfo shaderStages[2] = {};
+	pipelineDetails.GatherResource();
 
-	// Fragment shader
-	shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	shaderStages[0].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-	shaderStages[0].module = pipeline.fragmentShader;
-	shaderStages[0].pName = "main";
-
-	// Vertex shader / mesh shader
-	shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	shaderStages[1].pName = "main";
-#if USE_MESHLETS
-	shaderStages[1].stage = VK_SHADER_STAGE_MESH_BIT_NV;
-	shaderStages[1].module = pipeline.meshShader;
-#else
-	shaderStages[1].stage = VK_SHADER_STAGE_VERTEX_BIT;
-	shaderStages[1].module = pipeline.vertexShader;
-#endif
+	// Pipeline shader stages
+	std::vector<VkPipelineShaderStageCreateInfo> shaderStagesCreateInfo = pipelineDetails.GetShaderStagesCreateInfo();
 
 	// Dynamic state
 	// When opting for dynamic viewport(s) and scissor rectangle(s) you need to enable the respective dynamic states for the pipeline
@@ -1433,27 +1536,20 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	colorBlending.blendConstants[3] = 0.0f; // Optional
 
 	// Render pass
-	auto renderPass = pipeline.renderPass;
+	auto renderPass = pipelineDetails.renderPass;
 
 	// Pipeline layout
-	VkPipelineLayout pipelineLayout = GetPipelineLayout(device, pipeline);
-	assert(pipelineLayout);
-	pipeline.layout = pipelineLayout;
+	VkPipelineLayout pipelineLayout = pipelineDetails.CreatePipelineLayout(device, pushDescriptorSupported);
 
 	// Descriptor update template
-	VkDescriptorUpdateTemplate descriptorUpdateTemplate = GetDescriptorUpdateTemplate(device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS);
-	assert(descriptorUpdateTemplate);
-	pipeline.descriptorUpdateTemplate = descriptorUpdateTemplate;
-
-	// Destroyed in `pipeline`
-	// vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+	VkDescriptorUpdateTemplate descriptorUpdateTemplate = pipelineDetails.CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, pushDescriptorSupported);
 
 	// ==>
 	
 	VkGraphicsPipelineCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-	createInfo.pStages = shaderStages;
-	createInfo.stageCount = ARRAYSIZE(shaderStages);
+	createInfo.pStages = shaderStagesCreateInfo.data();
+	createInfo.stageCount = static_cast<uint32_t>(shaderStagesCreateInfo.size());
 	createInfo.pInputAssemblyState = &inputCreateInfo;
 	createInfo.pVertexInputState = &vertexInputCreateInfo;
 	createInfo.pViewportState = &viewportCreateInfo;
@@ -1568,13 +1664,13 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 	vertexBufferInfo.offset = 0;
 	vertexBufferInfo.range = vb.size;
 
-	std::vector<DescriptorInfo> descriptorInfos;
-	descriptorInfos.emplace_back(DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size)));
+	std::vector<Niagara::DescriptorInfo> descriptorInfos;
+	descriptorInfos.emplace_back(Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size)));
 
 #if USE_MESHLETS
 	const auto& mb = bufferMgr.meshletBuffer;
 
-	descriptorInfos.emplace_back(DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size)));
+	descriptorInfos.emplace_back(Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size)));
 
 	// Not used now, to be deleted
 	// >>>
