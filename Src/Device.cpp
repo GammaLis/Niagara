@@ -13,6 +13,11 @@
 
 namespace Niagara
 {
+	/// Globals
+
+	bool g_PushDescriptorsSupported = true;
+
+
 	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
 		VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 		VkDebugUtilsMessageTypeFlagsEXT messageType,

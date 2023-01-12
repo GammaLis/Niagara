@@ -22,7 +22,7 @@ namespace Niagara
 
 		return shaderModule;
 	}
-
+	
 	struct Id
 	{
 		uint32_t opCode;
@@ -261,7 +261,7 @@ namespace Niagara
 		return true;
 	}
 
-	uint32_t Shader::GatherResources(const std::vector<Shader*> &shaders, VkDescriptorType (&resourceTypes)[32])
+	uint32_t Shader::GatherResources(const std::vector<const Shader*> &shaders, VkDescriptorType (&resourceTypes)[32])
 	{
 		uint32_t resourceMask = 0;
 
@@ -285,7 +285,7 @@ namespace Niagara
 		return resourceMask;
 	}
 
-	std::vector<VkDescriptorSetLayoutBinding> Shader::GetSetBindings(const std::vector<Shader*> &shaders, VkDescriptorType resourceTypes[], uint32_t resourceMask)
+	std::vector<VkDescriptorSetLayoutBinding> Shader::GetSetBindings(const std::vector<const Shader*> &shaders, const VkDescriptorType resourceTypes[], uint32_t resourceMask)
 	{
 		std::vector<VkDescriptorSetLayoutBinding> setBindings;
 
@@ -319,7 +319,7 @@ namespace Niagara
 		return setBindings;
 	}
 
-	VkDescriptorSetLayout Shader::CreateDescriptorSetLayout(VkDevice device, const std::vector<Shader*> &shaders, bool pushDescriptorsSupported)
+	VkDescriptorSetLayout Shader::CreateDescriptorSetLayout(VkDevice device, const std::vector<const Shader*> &shaders, bool pushDescriptorsSupported)
 	{
 		std::vector<VkDescriptorSetLayoutBinding> setBindings = GetSetBindings(shaders);
 
@@ -335,7 +335,7 @@ namespace Niagara
 		return setLayout;
 	}
 
-	std::vector<VkDescriptorUpdateTemplateEntry> Shader::GetUpdateTemplateEntries(const std::vector<Shader*>& shaders, VkDescriptorType resourceTypes[], uint32_t resourceMask)
+	std::vector<VkDescriptorUpdateTemplateEntry> Shader::GetUpdateTemplateEntries(const std::vector<const Shader*>& shaders, VkDescriptorType resourceTypes[], uint32_t resourceMask)
 	{
 		std::vector<VkDescriptorUpdateTemplateEntry> entries;
 
@@ -365,7 +365,7 @@ namespace Niagara
 		return entries;
 	}
 
-	VkDescriptorUpdateTemplate Shader::CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, VkDescriptorSetLayout setLayout, const std::vector<Shader*> &shaders, bool pushDescriptorsSupported)
+	VkDescriptorUpdateTemplate Shader::CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, VkDescriptorSetLayout setLayout, const std::vector<const Shader*> &shaders, bool pushDescriptorsSupported)
 	{
 		std::vector<VkDescriptorUpdateTemplateEntry> entries = GetUpdateTemplateEntries(shaders);
 
@@ -374,6 +374,7 @@ namespace Niagara
 		createInfo.pDescriptorUpdateEntries = entries.data();
 		createInfo.descriptorUpdateEntryCount = static_cast<uint32_t>(entries.size());
 		createInfo.templateType = pushDescriptorsSupported ? VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR : VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+		// This parameter is ignored if templateType is not VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET.
 		createInfo.descriptorSetLayout = pushDescriptorsSupported ? nullptr : setLayout;
 		createInfo.pipelineLayout = layout;
 		createInfo.pipelineBindPoint = bindPoint;

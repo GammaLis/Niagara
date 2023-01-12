@@ -1,9 +1,11 @@
 // Ref: https://developer.nvidia.com/blog/introduction-turing-mesh-shaders/
+// Ref: https://github.com/KhronosGroup/Vulkan-Samples
 
 #include "pch.h"
 #include "Device.h"
 #include "Swapchain.h"
 #include "Shaders.h"
+#include "Pipeline.h"
 #include "Utilities.h"
 
 #include <iostream>
@@ -106,14 +108,10 @@ std::vector<VkDynamicState> g_DynamicStates =
 	VK_DYNAMIC_STATE_SCISSOR
 };
 
-VkFormat g_Format;
-VkExtent2D g_ViewportExtent;
-
 
 /// Declarations
 
 uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties);
-VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool);
 
 
 /// Structures
@@ -265,6 +263,7 @@ struct Vertex
 */
 struct Meshlet
 {
+	glm::vec4 cone;
 	uint32_t vertices[MESHLET_MAX_VERTICES];
 	uint8_t indices[MESHLET_MAX_PRIMITIVES*3]; // up to MESHLET_MAX_PRIMITIVES triangles
 	uint8_t vertexCount = 0;
@@ -287,9 +286,9 @@ struct GpuBuffer
 	uint32_t stride = 0;
 	uint32_t elementCount = 0;
 
-	static void Copy(VkDevice device, GpuBuffer &dstBuffer, const GpuBuffer &srcBuffer, VkDeviceSize size)
+	static void Copy(const Niagara::Device &device, GpuBuffer &dstBuffer, const GpuBuffer &srcBuffer, VkDeviceSize size)
 	{
-		VkCommandBuffer cmd = GetCommandBuffer(device, g_CommandMgr.commandPool);
+		VkCommandBuffer cmd = g_CommandMgr.GetCommandBuffer(device);
 
 		VkCommandBufferBeginInfo cmdBeginInfo{};
 		cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -319,7 +318,7 @@ struct GpuBuffer
 		vkFreeCommandBuffers(device, g_CommandMgr.commandPool, 1, &cmd);
 	}
 
-	void Init(Niagara::Device &device, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
+	void Init(const Niagara::Device &device, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
 	{
 		VkBufferCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -355,7 +354,7 @@ struct GpuBuffer
 			Update(device, pInitialData, size);
 	}
 
-	void Update(Niagara::Device &device, const void *pData, size_t size)
+	void Update(const Niagara::Device &device, const void *pData, size_t size)
 	{
 		if (buffer == VK_NULL_HANDLE || pData == nullptr) 
 			return;
@@ -375,7 +374,7 @@ struct GpuBuffer
 		}
 	}	
 
-	void Destory(VkDevice device)
+	void Destory(const Niagara::Device &device)
 	{
 		vkFreeMemory(device, memory, nullptr);
 		vkDestroyBuffer(device, buffer, nullptr);
@@ -388,7 +387,7 @@ struct BufferManager
 	GpuBuffer indexBuffer;
 	GpuBuffer meshletBuffer;
 
-	void Cleanup(VkDevice device)
+	void Cleanup(const Niagara::Device &device)
 	{
 		vertexBuffer.Destory(device);
 		indexBuffer.Destory(device);
@@ -695,92 +694,6 @@ bool CheckDeviceExtensionSupport(VkPhysicalDevice device)
 	return requiredExtensions.empty();
 }
 
-struct SwapChainSupportDetails
-{
-	VkSurfaceCapabilitiesKHR capabilities;
-	std::vector<VkSurfaceFormatKHR> formats;
-	std::vector<VkPresentModeKHR> presentModes;
-};
-
-SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice device, VkSurfaceKHR surface)
-{
-	SwapChainSupportDetails details{};
-
-	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
-
-	uint32_t formatCount;
-	vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
-	if (formatCount != 0)
-	{
-		details.formats.resize(formatCount);
-		vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
-	}
-
-	uint32_t presentModeCount;
-	vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
-	if (presentModeCount != 0)
-	{
-		details.presentModes.resize(presentModeCount);
-		vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
-	}
-
-	return details;
-}
-
-VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR> &availableFormats)
-{
-	// Each `VkSurfaceFormatKHR` entry contains a `format` and a `colorSpace` member.
-	for (const auto &surfaceFormat : availableFormats)
-	{
-		if (surfaceFormat.format == VK_FORMAT_B8G8R8A8_SRGB && surfaceFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-			return surfaceFormat;
-	}
-
-	// Fallback
-	return availableFormats[0];
-}
-
-VkPresentModeKHR ChooseSwapPresentMode(const std::vector<VkPresentModeKHR> &availablePresentModes)
-{
-	for (const auto &presentMode : availablePresentModes)
-	{
-		if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR)
-			return presentMode;
-	}
-	
-	return VK_PRESENT_MODE_FIFO_KHR;
-}
-
-VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities, GLFWwindow *window)
-{
-	// The swap extent is the resolution of the swap chain images and it's almost always exactly equal to the resolution of the window that
-	// we're drawing to `in pixels`.
-	// GLFW uses 2 units when measuring sizes: pixels and screen coordinates. For example, the resolution {WIDTH, HEIGHT} is measured in screen coordinates.
-	// If you are using a high DPI display, screen coordinates don't correspond to pixels. Due to the higher pixel density, the resolution of the window
-	// in pixels will be larger than the resolution in screen coordinates.
-	// We must use `glfwGetFramebufferSize` to query the resolution of the window in pixel before matching it against the minimum and maximum image extent.
-	if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
-	{
-		return capabilities.currentExtent;
-	}
-	else
-	{
-		int width, height;
-		glfwGetFramebufferSize(window, &width, &height);
-
-		VkExtent2D actualExtent =
-		{
-			static_cast<uint32_t>(width),
-			static_cast<uint32_t>(height)
-		};
-
-		actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-		actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
-
-		return actualExtent;
-	}
-}
-
 bool IsDeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface)
 {
 	VkPhysicalDeviceProperties props;
@@ -796,7 +709,7 @@ bool IsDeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface)
 		bool swapChainAdequate = false;
 		if (extensionsSupported)
 		{
-			SwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(device, surface);
+			Niagara::SwapChainSupportDetails swapChainSupport = Niagara::QuerySwapChainSupport(device, surface);
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
 		bValid = indices.IsComplete() && extensionsSupported && swapChainAdequate;
@@ -810,29 +723,6 @@ bool IsDeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface)
 #endif
 
 	return bValid;
-}
-
-int RateDeviceSuitability(VkPhysicalDevice device)
-{
-	int score = 0;
-
-	VkPhysicalDeviceProperties props;
-	VkPhysicalDeviceFeatures features;
-	vkGetPhysicalDeviceProperties(device, &props);
-	vkGetPhysicalDeviceFeatures(device, &features);
-
-	// Discrete GPUs have a significant performance advantage
-	if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-		score += 1000;
-
-	// Maximum possible size of textures affects graphics quality
-	score += props.limits.maxImageDimension2D;
-
-	// Application can't function without geometry shaders
-	if (!features.geometryShader)
-		score = 0;
-
-	return score;
 }
 
 VkPhysicalDevice GetPhysicalDevice(VkPhysicalDevice *physicalDevices, uint32_t physicalDeviceCount, VkSurfaceKHR surface)
@@ -948,132 +838,6 @@ VkDevice GetLogicalDevice(VkPhysicalDevice physicalDevice, const QueueFamilyIndi
 	return device;
 }
 
-VkSurfaceKHR GetWindowSurface(VkInstance instance, GLFWwindow *window)
-{
-	VkSurfaceKHR surface = VK_NULL_HANDLE;
-
-#if 0
-	VkWin32SurfaceCreateInfoKHR createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-	createInfo.hwnd = glfwGetWin32Window(window);
-	createInfo.hinstance = GetModuleHandle(nullptr);
-		
-	VK_CHECK(vkCreateWin32SurfaceKHR(instance, &createInfo, nullptr, &surface));
-
-#else
-	VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
-#endif
-
-	return surface;
-}
-
-struct SwapChainInfo
-{
-	VkSurfaceCapabilitiesKHR capabilities;
-	VkSurfaceFormatKHR surfaceFormat;
-	VkPresentModeKHR presentMode;
-	VkExtent2D extent;
-};
-
-SwapChainInfo GetSwapChainInfo(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, GLFWwindow *window)
-{
-	SwapChainSupportDetails swapChainDetails = QuerySwapChainSupport(physicalDevice, surface);
-
-	VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapChainDetails.formats);
-	VkPresentModeKHR presentMode = ChooseSwapPresentMode(swapChainDetails.presentModes);
-	VkExtent2D extent = ChooseSwapExtent(swapChainDetails.capabilities, window);
-
-	// Handling minimization
-	{
-		while (extent.width == 0 || extent.height == 0)
-		{
-			glfwWaitEvents();
-			swapChainDetails = QuerySwapChainSupport(physicalDevice, surface);
-			extent = ChooseSwapExtent(swapChainDetails.capabilities, window);
-		}
-	}
-
-	SwapChainInfo info{};
-	info.capabilities = swapChainDetails.capabilities;
-	info.surfaceFormat = surfaceFormat;
-	info.presentMode = presentMode;
-	info.extent = extent;
-
-	g_Format = surfaceFormat.format;
-	g_ViewportExtent = extent;
-
-	return info;
-}
-
-VkSwapchainKHR GetSwapChain(VkDevice device, VkSurfaceKHR surface, const SwapChainInfo &info)
-{
-	VkSurfaceFormatKHR surfaceFormat = info.surfaceFormat;
-	VkPresentModeKHR presentMode = info.presentMode;
-	VkExtent2D extent = info.extent;
-
-	// It is recommended to request at least one more image than the minimum
-	uint32_t imageCount = info.capabilities.minImageCount + 1;
-	if (info.capabilities.maxImageCount > 0 && imageCount > info.capabilities.maxImageCount)
-		imageCount = info.capabilities.maxImageCount;
-
-	VkSwapchainCreateInfoKHR createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-	createInfo.surface = surface;
-	createInfo.minImageCount = imageCount;
-	createInfo.imageFormat = surfaceFormat.format;
-	createInfo.imageColorSpace = surfaceFormat.colorSpace;
-	createInfo.imageExtent = extent;
-	// The `imageArrayLayers` specifies the amount of layers each image consists of. This is always 1 unless you are developing a stereoscopic 3D application.
-	createInfo.imageArrayLayers = 1;
-	createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-	// We need to specify how to handle swap chain images that will be used across multiple queue families. That will be the case in our app
-	// if the graphics queue family is different from the presentation family. We'll be drawing on the images in the swap chain from the graphics queue
-	// and then submitting them on the presentation queue.
-#if 0
-	QueueFamilyIndices indices = FindQueueFamilies(physicalDevice, surface);
-	uint32_t queueFamilyIndices[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
-	if (indices.graphicsFamily != indices.presentFamily)
-	{
-		// Images can be used across multiple queue families without explicit ownership transfers.
-		createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-		createInfo.queueFamilyIndexCount = 2;
-		createInfo.pQueueFamilyIndices = queueFamilyIndices;
-	}
-	else
-#endif
-	{
-		// An image is owned by one queue family at a time and ownership must be explicitly transferred before using it in another queue family.
-		// This option offers the best performance
-		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		createInfo.queueFamilyIndexCount = 0; // optional
-		createInfo.pQueueFamilyIndices = nullptr; // optional
-	}
-
-	// We can specify that a certain transform should be applied to images in the swap chain if it is supported, like a 90 degree clockwise rotation or horizontal flip.
-	// To specify that you do not want any transformation, simply specify the current transformation.
-	createInfo.preTransform = info.capabilities.currentTransform;
-	// The `compositeAlpha` field specifies if the alpha channel should be used for blending with other windows in the window system.
-	// You'll almost always want to simply ignore the alpha channel.
-	createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	createInfo.presentMode = presentMode;
-	createInfo.clipped = VK_TRUE;
-	createInfo.oldSwapchain = VK_NULL_HANDLE;
-
-	VkSwapchainKHR swapChain;
-	VK_CHECK(vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain));
-
-	return swapChain;
-}
-
-void GetSwapChainImages(VkDevice device, std::vector<VkImage> &swapChainImages, VkSwapchainKHR swapChain)
-{
-	uint32_t imageCount;
-	vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-	swapChainImages.resize(imageCount);
-	vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
-}
-
 void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const std::vector<VkImage> &images, VkFormat imageFormat)
 {
 	imageViews.resize(images.size());
@@ -1155,13 +919,14 @@ struct GraphicsPipelineDetails
 	Shader meshShader;
 	Shader fragShader;
 
-	// Descritpors
+	// Descriptors
 	uint32_t resourceNum = 0;
 	uint32_t resourceMask = 0;
 	VkDescriptorType resourceTypes[32];
 
-	// Niagara::DescriptorInfo resourceInfos[32];
-	// VkWriteDescriptorSet resourceSets[32];
+	uint32_t descriptorStart = 0, descriptorEnd = 0;
+	Niagara::DescriptorInfo resourceInfos[32];
+	VkWriteDescriptorSet resourceSets[32];
 
 	VkRenderPass renderPass;
 
@@ -1170,12 +935,50 @@ struct GraphicsPipelineDetails
 	VkPipelineLayout layout;
 	VkPipeline pipeline;
 
-	std::vector<Shader*> GetPipelineShaders()
+	std::vector<const Shader*> GetPipelineShaders() const
 	{
 		return { &vertShader, &taskShader, &meshShader, &fragShader };
 	}
 
-	std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo()
+	void GatherResource()
+	{
+		auto shaders = GetPipelineShaders();
+
+		resourceNum = 0;
+		resourceMask = 0;
+		for (const auto& shader : shaders)
+		{
+			if (shader->resourceMask)
+			{
+				for (uint32_t i = 0; i < 32; ++i)
+				{
+					if (shader->resourceMask & (1 << i))
+					{
+						if (resourceMask & (1 << i))
+							assert(resourceTypes[i] == shader->resourceTypes[i]);
+						else
+						{
+							resourceTypes[i] = shader->resourceTypes[i];
+							resourceMask |= 1 << i;
+						}
+						++resourceNum;
+					}
+				}
+			}
+		}
+
+		descriptorStart = descriptorEnd = 0;
+		for (uint32_t i = 0; i < 32; ++i)
+		{
+			if (resourceMask & (1 << i))
+			{
+				if (descriptorEnd == 0) descriptorStart = i;
+				descriptorEnd = i + 1;
+			}
+		}
+	}
+
+	std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo() const
 	{
 		std::vector<VkPipelineShaderStageCreateInfo> shaderStagesCreateInfo;
 
@@ -1196,31 +999,6 @@ struct GraphicsPipelineDetails
 		}
 
 		return shaderStagesCreateInfo;
-	}
-
-	void GatherResource()
-	{
-		auto shaders = GetPipelineShaders();
-
-		resourceNum = 0;
-		resourceMask = 0;
-		for (const auto& shader : shaders)
-		{
-			for (uint32_t i = 0; i < 32; ++i)
-			{
-				if (shader->resourceMask & (1 << i))
-				{
-					if (resourceMask & (1 << i))
-						assert(resourceTypes[i] == shader->resourceTypes[i]);
-					else
-					{
-						resourceTypes[i] = shader->resourceTypes[i];
-						resourceMask |= 1 << i;
-					}
-					++resourceNum;
-				}
-			}
-		}		
 	}
 
 	VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported = true)
@@ -1293,7 +1071,43 @@ struct GraphicsPipelineDetails
 		assert(resourceMask & (1 << index));
 		// TODO:
 		// assert(resourceTypes[index] == buffer.Type)
-		// resourceInfos[index] = info;
+		resourceInfos[index] = info;
+	}
+
+	void SetDescriptor(uint32_t index, VkWriteDescriptorSet descriptor)
+	{
+		assert(resourceMask & (1 << index));
+
+		resourceSets[index] = descriptor;
+	}
+
+	std::vector<Niagara::DescriptorInfo> GetDescriptorInfos() const
+	{
+		if (descriptorEnd - descriptorStart == 0) return {};
+
+		std::vector<Niagara::DescriptorInfo> descriptorInfos(descriptorEnd - descriptorStart);
+		for (uint32_t i = descriptorStart; i < descriptorEnd; ++i)
+		{
+			if (resourceMask & (1 << i))
+				descriptorInfos[i] = resourceInfos[i];
+		}
+
+		return descriptorInfos;
+	}
+
+	std::vector<VkWriteDescriptorSet> GetDescriptorSets() const
+	{
+		std::vector<VkWriteDescriptorSet> descriptorSets;
+
+		for (uint32_t i = descriptorStart; i < descriptorEnd; ++i)
+		{
+			if (resourceMask & (1 << i))
+			{
+				descriptorSets.push_back(resourceSets[i]);
+			}
+		}
+
+		return descriptorSets;
 	}
 
 	void Cleanup(VkDevice device)
@@ -1311,105 +1125,6 @@ struct GraphicsPipelineDetails
 		vkDestroyPipeline(device, pipeline, nullptr);
 	}
 };
-
-VkDescriptorSetLayout GetDescriptorSetLayout(VkDevice device)
-{
-#if USE_MESHLETS
-	VkDescriptorSetLayoutBinding setBinding[2] = {};
-	setBinding[0].binding = 0;
-	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	setBinding[0].descriptorCount = 1;
-	setBinding[0].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
-
-	setBinding[1].binding = 1;
-	setBinding[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	setBinding[1].descriptorCount = 1;
-	setBinding[1].stageFlags = VK_SHADER_STAGE_MESH_BIT_NV;
-
-#elif VERTEX_INPUT_MODE
-	VkDescriptorSetLayoutBinding setBinding[1] = {};
-	setBinding[0].binding = 0;
-	setBinding[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	setBinding[0].descriptorCount = 1;
-	setBinding[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-#endif
-
-	VkDescriptorSetLayoutCreateInfo setCreateInfo{};
-	setCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-#if USE_MESHLETS || VERTEX_INPUT_MODE
-	setCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-	setCreateInfo.bindingCount = ARRAYSIZE(setBinding);
-	setCreateInfo.pBindings = setBinding;
-#endif
-
-	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
-	VK_CHECK(vkCreateDescriptorSetLayout(device, &setCreateInfo, nullptr, &setLayout));
-
-	return setLayout;
-}
-
-VkPipelineLayout GetPipelineLayout(VkDevice device, GraphicsPipelineDetails& pipelineDetails, bool pushDescriptorSupported = true)
-{
-	VkDescriptorSetLayout setLayout = Niagara::Shader::CreateDescriptorSetLayout(
-		device, 
-		{&pipelineDetails.vertShader, &pipelineDetails.taskShader, &pipelineDetails.meshShader, &pipelineDetails.fragShader}, 
-		pushDescriptorSupported);
-	assert(setLayout);
-	pipelineDetails.descriptorSetLayouts.push_back(setLayout);
-
-	VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
-	pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutCreateInfo.setLayoutCount = 1;
-	pipelineLayoutCreateInfo.pSetLayouts = &setLayout;
-	pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
-	pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
-
-	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-	VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
-
-	return pipelineLayout;
-}
-
-VkDescriptorUpdateTemplate GetDescriptorUpdateTemplate(VkDevice device, GraphicsPipelineDetails &pipelineDetails, VkPipelineBindPoint bindPoint, uint32_t setLayoutIndex = 0)
-{
-	assert(pipelineDetails.descriptorSetLayouts.size() > setLayoutIndex);
-
-	std::vector<VkDescriptorUpdateTemplateEntry> entries;
-
-	VkDescriptorUpdateTemplateEntry templateEntry{};
-
-	templateEntry.descriptorCount = 1;
-	templateEntry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	templateEntry.dstArrayElement = 0;
-	templateEntry.dstBinding = 0;
-	templateEntry.stride = sizeof(Niagara::DescriptorInfo);
-	templateEntry.offset = 0;
-	entries.push_back(templateEntry);
-
-#if USE_MESHLETS
-	templateEntry.descriptorCount = 1;
-	templateEntry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	templateEntry.dstArrayElement = 0;
-	templateEntry.dstBinding = 1;
-	templateEntry.stride = sizeof(Niagara::DescriptorInfo);
-	templateEntry.offset = templateEntry.stride;
-	entries.push_back(templateEntry);
-#endif
-
-	VkDescriptorUpdateTemplateCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
-	createInfo.pipelineBindPoint = bindPoint;
-	createInfo.pipelineLayout = pipelineDetails.layout;
-	createInfo.descriptorSetLayout = pipelineDetails.descriptorSetLayouts[setLayoutIndex];
-	createInfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR;
-	createInfo.descriptorUpdateEntryCount = static_cast<uint32_t>(entries.size());
-	createInfo.pDescriptorUpdateEntries = entries.data();
-
-	VkDescriptorUpdateTemplate descUpdateTemplate = VK_NULL_HANDLE;
-	VK_CHECK(vkCreateDescriptorUpdateTemplate(device, &createInfo, nullptr, &descUpdateTemplate));
-
-	return descUpdateTemplate;
-}
 
 VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelineDetails, VkExtent2D viewportExtent, bool pushDescriptorSupported = true)
 {
@@ -1599,34 +1314,7 @@ void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, 
 	}
 }
 
-VkCommandPool GetCommandPool(VkDevice device, uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
-{	
-	VkCommandPoolCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-	createInfo.queueFamilyIndex = queueFamilyIndex;
-	createInfo.flags = createFlags;
-
-	VkCommandPool commandPool = VK_NULL_HANDLE;
-	VK_CHECK(vkCreateCommandPool(device, &createInfo, nullptr, &commandPool));
-
-	return commandPool;	
-}
-
-VkCommandBuffer GetCommandBuffer(VkDevice device, VkCommandPool commandPool)
-{
-	VkCommandBufferAllocateInfo allocInfo{};
-	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	allocInfo.commandPool = commandPool;
-	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	allocInfo.commandBufferCount = 1;
-
-	VkCommandBuffer commandBuffer;
-	VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer));
-
-	return commandBuffer;
-}
-
-void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pipelineDetails,
+void RecordCommandBuffer(VkCommandBuffer cmd, GraphicsPipelineDetails &pipelineDetails,
 	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh, const VkExtent2D &viewportExtent)
 {
 	VkCommandBufferBeginInfo beginInfo{};
@@ -1659,54 +1347,20 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const GraphicsPipelineDetails &pip
 	const auto& ib = bufferMgr.indexBuffer;
 
 #if VERTEX_INPUT_MODE == 1
-	VkDescriptorBufferInfo vertexBufferInfo{};
-	vertexBufferInfo.buffer = vb.buffer;
-	vertexBufferInfo.offset = 0;
-	vertexBufferInfo.range = vb.size;
-
-	std::vector<Niagara::DescriptorInfo> descriptorInfos;
-	descriptorInfos.emplace_back(Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size)));
+	pipelineDetails.SetDescriptor(0, Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size)));
 
 #if USE_MESHLETS
 	const auto& mb = bufferMgr.meshletBuffer;
 
-	descriptorInfos.emplace_back(Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size)));
-
-	// Not used now, to be deleted
-	// >>>
-	VkDescriptorBufferInfo meshletBufferInfo{};
-	meshletBufferInfo.buffer = mb.buffer;
-	meshletBufferInfo.offset = 0;
-	meshletBufferInfo.range = mb.size;
-
-	VkWriteDescriptorSet writeDescriptors[2] = {};
-
-	writeDescriptors[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writeDescriptors[0].dstBinding = 0;
-	writeDescriptors[0].descriptorCount = 1;
-	writeDescriptors[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	writeDescriptors[0].pBufferInfo = &vertexBufferInfo;
-
-	writeDescriptors[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writeDescriptors[1].dstBinding = 1;
-	writeDescriptors[1].descriptorCount = 1;
-	writeDescriptors[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	writeDescriptors[1].pBufferInfo = &meshletBufferInfo;
-	// <<<
+	pipelineDetails.SetDescriptor(1, Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size)));
 
 #else
-	VkWriteDescriptorSet writeDescriptors[1] = {};
-	writeDescriptors[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writeDescriptors[0].dstBinding = 0;
-	writeDescriptors[0].descriptorCount = 1;
-	writeDescriptors[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	writeDescriptors[0].pBufferInfo = &vertexBufferInfo;
-
 	if (ib.size > 0)
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 #endif
 
 #if 1
+	auto descriptorInfos = pipelineDetails.GetDescriptorInfos();
 	vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelineDetails.descriptorUpdateTemplate, pipelineDetails.layout, 0, descriptorInfos.data());
 #else
 	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.layout, 0, ARRAYSIZE(writeDescriptors), writeDescriptors);
@@ -1835,12 +1489,12 @@ struct FrameResources
 	}
 };
 
-void GetFrameResources(VkDevice device, std::vector<FrameResources> &frameResources, VkCommandPool commandPool)
+void GetFrameResources(const Niagara::Device &device, std::vector<FrameResources> &frameResources)
 {
 	frameResources.resize(MAX_FRAMES_IN_FLIGHT);
 	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
-		frameResources[i].commandBuffer = GetCommandBuffer(device, commandPool);
+		frameResources[i].commandBuffer = g_CommandMgr.GetCommandBuffer(device);
 		frameResources[i].syncObjects = GetSyncObjects(device);
 	}
 }
@@ -1854,31 +1508,6 @@ void CleanupSwapChain(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkI
 		vkDestroyFramebuffer(device, framebuffer, nullptr);
 
 	vkDestroySwapchainKHR(device, swapChain, nullptr);
-}
-
-void GetSwapChain(VkDevice device, VkSwapchainKHR &swapChain, 
-	std::vector<VkImage> &swapChainImages, std::vector<VkImageView> &swapChainImageViews, std::vector<VkFramebuffer> &framebuffers,
-	VkSurfaceKHR surface, VkRenderPass renderPass, const SwapChainInfo &info)
-{
-	if (swapChain != VK_NULL_HANDLE)
-	{
-		// We shouldn't touch resources that may still be in use.
-		vkDeviceWaitIdle(device);
-
-		CleanupSwapChain(device, swapChain, swapChainImageViews, framebuffers);
-	}
-
-	swapChain = GetSwapChain(device, surface, info);
-	assert(swapChain);
-
-	GetSwapChainImages(device, swapChainImages, swapChain);
-	assert(!swapChainImages.empty());
-
-	GetImageViews(device, swapChainImageViews, swapChainImages, info.surfaceFormat.format);
-	assert(!swapChainImageViews.empty());
-
-	GetFramebuffers(device, framebuffers, swapChainImageViews, info.extent, renderPass);
-	assert(!framebuffers.empty());
 }
 
 VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
@@ -1899,7 +1528,7 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 /// Main
 
 void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex,
-	VkCommandBuffer cmd, const GraphicsPipelineDetails& pipelineDetails, VkQueue graphicsQueue,
+	VkCommandBuffer cmd, GraphicsPipelineDetails& pipelineDetails, VkQueue graphicsQueue,
 	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh, const VkExtent2D &viewportExtend)
 {
 	// Recording the command buffer
@@ -2238,6 +1867,13 @@ int main()
 	assert(graphicsPipeline);
 	pipelineDetails.pipeline = graphicsPipeline;
 
+#if 0
+	Niagara::GraphicsPipeline np;
+	np.meshShader.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
+	np.fragShader.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
+	np.Init(device);
+#endif
+
 	// Command buffers
 
 	// Creating the synchronization objects
@@ -2246,7 +1882,7 @@ int main()
 	SyncObjects syncObjects = GetSyncObjects(device);
 
 	std::vector<FrameResources> frameResources;
-	GetFrameResources(device, frameResources, g_CommandMgr.commandPool);
+	GetFrameResources(device, frameResources);
 
 	VkQueryPool queryPool = GetQueryPool(device, 128);
 	assert(queryPool);

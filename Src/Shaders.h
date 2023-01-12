@@ -13,6 +13,8 @@ namespace Niagara
 			VkDescriptorImageInfo imageInfo;
 		};
 
+		DescriptorInfo() {  }
+
 		DescriptorInfo(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize range = VK_WHOLE_SIZE)
 		{
 			bufferInfo.buffer = buffer;
@@ -47,12 +49,11 @@ namespace Niagara
 		static void ParseShader(Shader& shader, const uint32_t* code, size_t codeSize);
 		static bool LoadShader(VkDevice device, Shader& shader, const std::string& fileName);
 
-		static uint32_t GatherResources(const std::vector<Shader*>& shaders, VkDescriptorType(&resourceTypes)[32]);
-		static std::vector<VkDescriptorSetLayoutBinding> GetSetBindings(const std::vector<Shader*>& shaders, VkDescriptorType resourceTypes[] = nullptr, uint32_t resourceMask = 0);
-		static std::vector<VkDescriptorUpdateTemplateEntry> GetUpdateTemplateEntries(const std::vector<Shader*>& shaders, VkDescriptorType resourceTypes[] = nullptr, uint32_t resourceMask = 0);
-		static VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, const std::vector<Shader*>& shaders, bool pushDescriptorsSupported = true);
-		static VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, VkDescriptorSetLayout setLayout, const std::vector<Shader*> &shaders, bool pushDescriptorsSupported = true);
-		static std::vector<DescriptorInfo> GetDescriptorInfos(const std::vector<Shader*> &shaders);
+		static uint32_t GatherResources(const std::vector<const Shader*>& shaders, VkDescriptorType(&resourceTypes)[32]);
+		static std::vector<VkDescriptorSetLayoutBinding> GetSetBindings(const std::vector<const Shader*>& shaders, const VkDescriptorType resourceTypes[] = nullptr, uint32_t resourceMask = 0);
+		static std::vector<VkDescriptorUpdateTemplateEntry> GetUpdateTemplateEntries(const std::vector<const Shader*>& shaders, VkDescriptorType resourceTypes[] = nullptr, uint32_t resourceMask = 0);
+		static VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, const std::vector<const Shader*>& shaders, bool pushDescriptorsSupported = true);
+		static VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, VkDescriptorSetLayout setLayout, const std::vector<const Shader*> &shaders, bool pushDescriptorsSupported = true);
 
 		bool Load(VkDevice device, const std::string &fileName)
 		{

@@ -31,6 +31,7 @@ struct Vertex
 
 struct Meshlet
 {
+	vec4 cone;
 	uint vertices[MAX_VERTICES];
 	uint8_t indices[MAX_PRIMITIVES*3]; // up to MAX_PRIMITIVES triangels
 	uint8_t vertexCount;

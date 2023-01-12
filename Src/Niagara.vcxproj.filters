@@ -156,6 +156,9 @@
     <ClCompile Include="Swapchain.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Pipeline.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -197,6 +200,9 @@
     <ClInclude Include="Swapchain.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Pipeline.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">
@@ -214,5 +220,10 @@
     <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Shaders\MeshCommon.h">
+      <Filter>Shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

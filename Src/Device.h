@@ -21,6 +21,8 @@ namespace Niagara
 	bool SupportsPresentation(VkPhysicalDevice physicalDevice, uint32_t queueIndex);
 	VkPhysicalDevice CreatePhysicalDevice(VkInstance instance);
 
+	extern bool g_PushDescriptorsSupported;
+
 	class Device
 	{
 	public:

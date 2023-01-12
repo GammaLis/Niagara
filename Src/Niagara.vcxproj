@@ -184,6 +184,7 @@
     <ClCompile Include="..\External\volk\volk.c" />
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Pipeline.cpp" />
     <ClCompile Include="Shaders.cpp" />
     <ClCompile Include="Swapchain.cpp" />
     <ClCompile Include="Utilities.cpp" />
@@ -196,8 +197,10 @@
     <ClInclude Include="..\External\glfw\src\win32_time.h" />
     <ClInclude Include="..\External\meshoptimizer\src\meshoptimizer.h" />
     <ClInclude Include="..\External\volk\volk.h" />
+    <None Include="..\Shaders\MeshCommon.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="Pipeline.h" />
     <ClInclude Include="Shaders.h" />
     <ClInclude Include="Swapchain.h" />
     <ClInclude Include="Utilities.h" />
