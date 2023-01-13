@@ -119,6 +119,7 @@ namespace Niagara
 	struct GraphicsPipelineState
 	{
 		GraphicsPipelineState() = default;
+		void Update();
 
 		VertexInputState vertexInputState;
 		InputAssemblyState inputAssemblyState;
@@ -132,7 +133,7 @@ namespace Niagara
 		std::vector<VkVertexInputBindingDescription> bindingDescriptions;
 		std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
 
-		std::vector<ColorBlendAttachmentState> colorBlendAttachments;
+		std::vector<ColorBlendAttachmentState> colorBlendAttachments = { ColorBlendAttachmentState() };
 		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 
 		std::vector<VkViewport> viewports;

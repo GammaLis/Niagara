@@ -20,7 +20,6 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
-using namespace std;
 
 /// Mesh
 #include "meshoptimizer.h"
@@ -165,9 +164,165 @@ namespace Niagara
 	private:
 		std::queue<VkCommandBuffer> m_CommandBuffers;
 	};
+
+	class CommandContext
+	{
+	private:
+		uint32_t descriptorMask = 0;
+		VkDescriptorType descriptorTypes[Pipeline::s_MaxDescriptorNum] = {};
+		uint32_t descriptorCount = 0;
+		uint32_t descriptorStart = 0, descriptorEnd = 0;
+		VkPipelineBindPoint pipelineBindPoint = (VkPipelineBindPoint)0;
+
+		// Caches
+		VkCommandBuffer cachedCommandBuffer = VK_NULL_HANDLE;
+		VkRenderPass cachedRenderPass = VK_NULL_HANDLE;
+
+		VkPipelineLayout cachedPipelineLayout = VK_NULL_HANDLE;
+		VkDescriptorUpdateTemplate cachedDescriptorUpdateTemplate = VK_NULL_HANDLE;
+		VkDescriptorSetLayout cachedDescriptorSetLayout = VK_NULL_HANDLE;
+		DescriptorInfo cachedDescriptorInfos[Pipeline::s_MaxDescriptorNum] = {};
+		VkWriteDescriptorSet cachedWriteDescriptorSets[Pipeline::s_MaxDescriptorNum] = {};
+
+		void UpdateDescriptorInfo(const Pipeline& pipeline)
+		{
+			descriptorMask = pipeline.descriptorMask;
+			descriptorCount = pipeline.descriptorCount;
+			descriptorStart = pipeline.descriptorStart;
+			descriptorEnd = pipeline.descriptorEnd;
+
+			uint32_t length = sizeof(descriptorTypes);
+			memcpy_s(descriptorTypes, length, pipeline.descriptorTypes, length);
+
+			cachedPipelineLayout = pipeline.layout;
+
+			cachedDescriptorSetLayout = pipeline.descriptorSetLayout;
+			if (pipeline.descriptorUpdateTemplate)
+				cachedDescriptorUpdateTemplate = pipeline.descriptorUpdateTemplate;
+		}
+
+	public:
+		void BeginCommandBuffer(VkCommandBuffer cmd, VkCommandBufferUsageFlags usage = 0)
+		{
+			VkCommandBufferBeginInfo beginInfo{};
+			beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginInfo.flags = usage;
+			beginInfo.pInheritanceInfo = nullptr;
+
+			VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+
+			cachedCommandBuffer = cmd;
+		}
+
+		void EndCommandBuffer(VkCommandBuffer cmd)
+		{
+			VK_CHECK(vkEndCommandBuffer(cmd));
+
+			cachedCommandBuffer = VK_NULL_HANDLE;
+		}
+
+		void BeginRenderPass(VkCommandBuffer cmd, VkRenderPass renderPass, VkFramebuffer framebuffer, const VkRect2D& renderArea, const std::vector<VkClearValue>& clearValues)
+		{
+			VkRenderPassBeginInfo beginInfo{};
+			beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+			beginInfo.renderPass = renderPass;
+			beginInfo.framebuffer = framebuffer;
+			beginInfo.renderArea = renderArea;
+			beginInfo.pClearValues = clearValues.data();
+			beginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+
+			vkCmdBeginRenderPass(cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+			cachedRenderPass = renderPass;
+		}
+
+		void EndRenderPass(VkCommandBuffer cmd)
+		{
+			vkCmdEndRenderPass(cmd);
+
+			cachedRenderPass = VK_NULL_HANDLE;
+		}
+
+		void BindPipeline(VkCommandBuffer cmd, const GraphicsPipeline& pipeline)
+		{
+			pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+			vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
+
+			UpdateDescriptorInfo(pipeline);
+		}
+
+		void BindPipeline(VkCommandBuffer cmd, const ComputePipeline& pipeline)
+		{
+			pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+			vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
+
+			UpdateDescriptorInfo(pipeline);
+		}
+
+		void SetDescriptor(uint32_t index, const DescriptorInfo& info)
+		{
+			assert(descriptorMask & (1 << index));
+			// TODO:
+			// assert(descriptorTypes[index] == buffer.Type)
+			cachedDescriptorInfos[index] = info;
+		}
+
+		void SetDescriptor(uint32_t index, const VkWriteDescriptorSet& descriptor)
+		{
+			assert(descriptorMask & (1 << index));
+
+			cachedWriteDescriptorSets[index] = descriptor;
+		}
+
+		std::vector<DescriptorInfo> GetDescriptorInfos() const
+		{
+			if (descriptorEnd - descriptorStart == 0) return {};
+
+			std::vector<DescriptorInfo> descriptorInfos(descriptorEnd - descriptorStart);
+			for (uint32_t i = descriptorStart; i < descriptorEnd; ++i)
+			{
+				if (descriptorMask & (1 << i))
+					descriptorInfos[i] = cachedDescriptorInfos[i];
+			}
+
+			return descriptorInfos;
+		}
+
+		std::vector<VkWriteDescriptorSet> GetDescriptorSets() const
+		{
+			std::vector<VkWriteDescriptorSet> descriptorSets;
+
+			for (uint32_t i = descriptorStart; i < descriptorEnd; ++i)
+			{
+				if (descriptorMask & (1 << i))
+				{
+					descriptorSets.push_back(cachedWriteDescriptorSets[i]);
+				}
+			}
+
+			return descriptorSets;
+		}
+
+		void PushDescriptorSetWithTemplate(VkCommandBuffer cmd)
+		{
+			assert(cachedDescriptorUpdateTemplate);
+
+			auto descriptorInfos = GetDescriptorInfos();
+			vkCmdPushDescriptorSetWithTemplateKHR(cmd, cachedDescriptorUpdateTemplate, cachedPipelineLayout, 0, descriptorInfos.data());
+		}
+
+		void PushDescriptorSet(VkCommandBuffer cmd)
+		{
+			auto writeDescriptorSets = GetDescriptorSets();
+			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipelineLayout, 0, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
+		}
+
+	};
 }
 
 Niagara::CommandManager g_CommandMgr{};
+Niagara::CommandContext g_CommandContext{};
+
 
 struct Vertex
 {
@@ -195,9 +350,9 @@ struct Vertex
 		return desc;
 	}
 
-	static std::array<VkVertexInputAttributeDescription, 3> GetAttributeDescriptions()
+	static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions()
 	{
-		std::array<VkVertexInputAttributeDescription, 3> attributeDescs{};
+		std::vector<VkVertexInputAttributeDescription> attributeDescs(3);
 
 		// float	VK_FORAMT_R32_SFLOAT
 		// vec2		VK_FORMAT_R32G32_SFLOAT
@@ -838,6 +993,31 @@ VkDevice GetLogicalDevice(VkPhysicalDevice physicalDevice, const QueueFamilyIndi
 	return device;
 }
 
+VkViewport GetViewport(const VkRect2D &rect, float minDepth = 0.0f, float maxDepth = 1.0f)
+{
+	float fw = static_cast<float>(rect.extent.width);
+	float fh = static_cast<float>(rect.extent.height);
+	float fx = static_cast<float>(rect.offset.x);
+	float fy = static_cast<float>(rect.offset.y);
+
+	VkViewport viewport{};
+#if !FLIP_VIEWPORT
+	viewport.x = fx;
+	viewport.y = fy;
+	viewport.width = fw;
+	viewport.height = fh;
+#else
+	viewport.x = fx;
+	viewport.y = fy + fh;
+	viewport.width = fw;
+	viewport.height = -fh;
+#endif
+	viewport.minDepth = minDepth;
+	viewport.maxDepth = maxDepth;
+
+	return viewport;
+}
+
 void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const std::vector<VkImage> &images, VkFormat imageFormat)
 {
 	imageViews.resize(images.size());
@@ -1287,6 +1467,58 @@ VkPipeline GetGraphicsPipeline(VkDevice device, GraphicsPipelineDetails &pipelin
 	return graphicsPipeline;
 }
 
+void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, VkRenderPass renderPass, uint32_t subpass, const VkRect2D& viewportRect)
+{
+#if DRAW_MODE == DRAW_SIMPLE_MESH
+
+	// Pipeline shaders
+#if USE_MESHLETS
+	pipeline.meshShader.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
+#else
+	pipeline.vertShader.Load(device, "./CompiledShaders/SimpleMesh.vert.spv");
+#endif
+	pipeline.fragShader.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
+
+#else
+	pipeline.vertShader.Load(device, "./CompiledShaders/SimpleTriangle.vert.spv");
+	pipeline.fragShader.Load(device, "./CompiledShaders/SimpleTriangle.frag.spv");
+#endif
+
+	// Pipeline states
+	auto& pipelineState = pipeline.pipelineState;
+
+	// Vertex input state
+#if !VERTEX_INPUT_MODE
+	pipelineState.bindingDescriptions = { Vertex::GetBindingDescription() };
+	pipelineState.attributeDescriptions = Vertex::GetAttributeDescriptions();
+#endif
+
+	// Input assembly state
+	// ...
+
+	// Viewports and scissors
+	pipelineState.viewports = { GetViewport(viewportRect) };
+	pipelineState.scissors = { viewportRect };
+
+	// Rasterization state
+	auto &rasterizationState = pipelineState.rasterizationState;
+#if FLIP_VIEWPORT
+	rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+#endif
+
+	// Color blend state
+	// ...
+
+	// Dynamic states
+	// ...
+
+	// Render pass
+	pipeline.renderPass = renderPass;
+	pipeline.subpass = subpass;
+
+	pipeline.Init(device);
+}
+
 #pragma endregion
 
 void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, const std::vector<VkImageView> &swapChainImageViews, const VkExtent2D &size, VkRenderPass renderPass)
@@ -1314,111 +1546,61 @@ void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, 
 	}
 }
 
-void RecordCommandBuffer(VkCommandBuffer cmd, GraphicsPipelineDetails &pipelineDetails,
-	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh, const VkExtent2D &viewportExtent)
+void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipeline,
+	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh, const VkRect2D &viewportRect)
 {
-	VkCommandBufferBeginInfo beginInfo{};
-	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	beginInfo.flags = 0; // Optional
-	beginInfo.pInheritanceInfo = nullptr; // Optional
-
-	VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
-
-	// Starting a render pass
-	VkRenderPassBeginInfo renderPassInfo{};
-	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	renderPassInfo.renderPass = pipelineDetails.renderPass;
-	renderPassInfo.framebuffer = framebuffers[imageIndex];
-
-	renderPassInfo.renderArea.offset = {0, 0};
-	renderPassInfo.renderArea.extent = viewportExtent;
-
 	VkClearValue clearColor;
 	clearColor.color = { 0.2f, 0.2f, 0.6f, 1.0f };
-	renderPassInfo.clearValueCount = 1;
-	renderPassInfo.pClearValues = &clearColor;
-
-	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-	// Basic drawing commands
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.pipeline);
 
 	const auto& vb = bufferMgr.vertexBuffer;
 	const auto& ib = bufferMgr.indexBuffer;
 
+	g_CommandContext.BeginCommandBuffer(cmd);
+	g_CommandContext.BeginRenderPass(cmd, pipeline.renderPass, framebuffers[imageIndex], viewportRect, { clearColor });
+
+	g_CommandContext.BindPipeline(cmd, pipeline);
+
+	// Set viewports & scissors
+	VkViewport dynamicViewport = GetViewport(viewportRect);
+	vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
+	vkCmdSetScissor(cmd, 0, 1, &viewportRect);
+
 #if VERTEX_INPUT_MODE == 1
-	pipelineDetails.SetDescriptor(0, Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size)));
+	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size));
+	g_CommandContext.SetDescriptor(0, vbInfo);
 
 #if USE_MESHLETS
 	const auto& mb = bufferMgr.meshletBuffer;
 
-	pipelineDetails.SetDescriptor(1, Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size)));
-
-#else
-	if (ib.size > 0)
-		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+	auto mbInfo = Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size));
+	g_CommandContext.SetDescriptor(1, mbInfo);
 #endif
 
-#if 1
-	auto descriptorInfos = pipelineDetails.GetDescriptorInfos();
-	vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelineDetails.descriptorUpdateTemplate, pipelineDetails.layout, 0, descriptorInfos.data());
-#else
-	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineDetails.layout, 0, ARRAYSIZE(writeDescriptors), writeDescriptors);
 #endif
-	
-#else
+
+	g_CommandContext.PushDescriptorSetWithTemplate(cmd);
+
 	VkDeviceSize offset = 0;
 	vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
 
-	if (ib.size > 0)
-		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
-#endif	
-
-	VkViewport viewport{};
-#if !FLIP_VIEWPORT
-	viewport.x = 0.0f;
-	viewport.y = 0.0f;
-	viewport.width = static_cast<float>(viewportExtend.width);
-	viewport.height = static_cast<float>(viewportExtend.height);
-#else
-	// VK_CULL_MODE_NONE
-	viewport.x = 0.0f;
-	viewport.y = static_cast<float>(viewportExtent.height);
-	viewport.width = static_cast<float>(viewportExtent.width);
-	viewport.height = -static_cast<float>(viewportExtent.height);
-#endif
-	viewport.minDepth = 0.0f;
-	viewport.maxDepth = 1.0f;
-	vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-	VkRect2D scissor{};
-	scissor.offset = {0, 0};
-	scissor.extent = viewportExtent;
-	vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-#if DRAW_MODE == DRAW_SIMPLE_MESH
-
 #if USE_MESHLETS
-	uint32_t taskCount = static_cast<uint32_t>(mesh.meshlets.size());
-	vkCmdDrawMeshTasksNV(cmd, taskCount, 0);
-		
+	uint32_t nTtask = static_cast<uint32_t>(mesh.meshlets.size());
+	vkCmdDrawMeshTasksNV(cmd, nTtask, 0);
+
 #else
-	uint32_t vertexCount = static_cast<uint32_t>(vb.size / sizeof(Vertex));
-	uint32_t indexCount = static_cast<uint32_t>(ib.size / sizeof(uint32_t));
+	uint32_t nVertex = static_cast<uint32_t>(vb.size / sizeof(Vertex));
+	uint32_t nIndex = static_cast<uint32_t>(ib.size / sizeof(uint32_t));
 	if (ib.size > 0)
-		vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+	{
+		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdDrawIndexed(cmd, nIndex, 1, 0, 0, 0);
+	}
 	else
-		vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+		vkCmdDraw(cmd, nVertex, 1, 0, 0);
 #endif
 
-#else
-	vkCmdDraw(cmd, 3, 1, 0, 0);
-#endif
-
-	// Finishing up
-	vkCmdEndRenderPass(cmd);
-
-	VK_CHECK(vkEndCommandBuffer(cmd));
+	g_CommandContext.EndRenderPass(cmd);
+	g_CommandContext.EndCommandBuffer(cmd);
 }
 
 struct SyncObjects
@@ -1499,17 +1681,6 @@ void GetFrameResources(const Niagara::Device &device, std::vector<FrameResources
 	}
 }
 
-void CleanupSwapChain(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkImageView> &swapChainImageViews, std::vector<VkFramebuffer> &framebuffers)
-{
-	for(auto &view : swapChainImageViews)
-		vkDestroyImageView(device, view, nullptr);
-
-	for (auto &framebuffer : framebuffers)
-		vkDestroyFramebuffer(device, framebuffer, nullptr);
-
-	vkDestroySwapchainKHR(device, swapChain, nullptr);
-}
-
 VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 {
 	VkQueryPoolCreateInfo createInfo{};
@@ -1528,12 +1699,12 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 /// Main
 
 void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex,
-	VkCommandBuffer cmd, GraphicsPipelineDetails& pipelineDetails, VkQueue graphicsQueue,
-	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh, const VkExtent2D &viewportExtend)
+	VkCommandBuffer cmd, Niagara::GraphicsPipeline &pipeline, VkQueue graphicsQueue,
+	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh, const VkRect2D &viewportRect)
 {
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
- 	RecordCommandBuffer(cmd, pipelineDetails, framebuffers, bufferMgr, imageIndex, mesh, viewportExtend);
+ 	RecordCommandBuffer(cmd, pipeline, framebuffers, bufferMgr, imageIndex, mesh, viewportRect);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -1775,13 +1946,13 @@ void DestroyBuffer(VkDevice device, const GpuBuffer &buffer)
 
 int main()
 {
-	cout << "Hello, Vulkan!" << endl;
+	std::cout << "Hello, Vulkan!" << std::endl;
 
 	// Window
 	int rc = glfwInit();
 	if (rc == GLFW_FALSE) 
 	{
-		cout << "GLFW init failed!" << endl;
+		std::cout << "GLFW init failed!" << std::endl;
 		return -1;
 	}
 
@@ -1861,18 +2032,8 @@ int main()
 	GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
 	
 	// Pipeline
-	GraphicsPipelineDetails pipelineDetails{};
-	pipelineDetails.renderPass = renderPass;
-	VkPipeline graphicsPipeline = GetGraphicsPipeline(device, pipelineDetails, swapchain.extent);
-	assert(graphicsPipeline);
-	pipelineDetails.pipeline = graphicsPipeline;
-
-#if 0
-	Niagara::GraphicsPipeline np;
-	np.meshShader.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
-	np.fragShader.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
-	np.Init(device);
-#endif
+	Niagara::GraphicsPipeline pipeline;
+	GetMeshDrawPipeline(device, pipeline, renderPass, 0, { {0, 0}, swapchain.extent });
 
 	// Command buffers
 
@@ -1995,8 +2156,8 @@ int main()
 		// Only reset the fence if we are submitting work
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
-		Render(device, currentSyncObjects, imageIndex,
-			currentCommandBuffer, pipelineDetails, graphicsQueue, framebuffers, bufferMgr, mesh, swapchain.extent);
+		Render(device, currentSyncObjects, imageIndex, currentCommandBuffer, 
+			pipeline, graphicsQueue, framebuffers, bufferMgr, mesh, { {0, 0}, swapchain.extent});
 
 		// Present
 		result = swapchain.QueuePresent(graphicsQueue, imageIndex, currentSyncObjects.renderFinishedSemaphore);
@@ -2051,10 +2212,10 @@ int main()
 	
 	bufferMgr.Cleanup(device);
 
-	// Pipeline
-	pipelineDetails.Cleanup(device);
-
 	g_CommandMgr.Cleanup(device);
+
+	// Pipeline
+	pipeline.Destroy(device);
 
 	swapchain.Destroy(device);
 

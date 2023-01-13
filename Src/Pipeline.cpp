@@ -118,6 +118,29 @@ namespace Niagara
 		return pipelineLayout;
 	}
 
+	void GraphicsPipelineState::Update()
+	{
+		// Vertex input state
+		vertexInputState.pVertexBindingDescriptions = bindingDescriptions.data();
+		vertexInputState.vertexBindingDescriptionCount= static_cast<uint32_t>(bindingDescriptions.size());
+		vertexInputState.pVertexAttributeDescriptions = attributeDescriptions.data();
+		vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+
+		// Viewport state
+		viewportState.pViewports = viewports.data();
+		viewportState.viewportCount = std::max(1u, static_cast<uint32_t>(viewports.size()));
+		viewportState.pScissors = scissors.data();
+		viewportState.scissorCount = std::max(1u, static_cast<uint32_t>(scissors.size()));
+
+		// Color blend state
+		colorBlendState.pAttachments = colorBlendAttachments.data();
+		colorBlendState.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
+
+		// Dynamic state
+		dynamicState.pDynamicStates = dynamicStates.data();
+		dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+	}
+
 	void Pipeline::Init(VkDevice device)
 	{
 		assert(ShadersValid());
@@ -176,29 +199,31 @@ namespace Niagara
 
 		auto shaderStages = GetShaderStagesCreateInfo();
 
+		pipelineState.Update();
+
 		VkGraphicsPipelineCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 		createInfo.pStages = shaderStages.data();
 		createInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
 		createInfo.pVertexInputState = &pipelineState.vertexInputState; // <--
-		createInfo.pInputAssemblyState = &pipelineState.inputAssemblyState; // <--
-		createInfo.pViewportState = &pipelineState.viewportState;
+		createInfo.pInputAssemblyState = &pipelineState.inputAssemblyState;
+		createInfo.pViewportState = &pipelineState.viewportState; // <--
 		createInfo.pRasterizationState = &pipelineState.rasterizationState;
 		createInfo.pMultisampleState = &pipelineState.multisampleState;
 		createInfo.pDepthStencilState = &pipelineState.depthStencilState; // <--
 		createInfo.pColorBlendState = &pipelineState.colorBlendState; // <--
-		createInfo.pDynamicState = &pipelineState.dynamicState;
+		createInfo.pDynamicState = &pipelineState.dynamicState; // <--
 		createInfo.layout = layout;
-		createInfo.renderPass = renderPass;
-		createInfo.subpass = subpass;
+		createInfo.renderPass = renderPass; // <--
+		createInfo.subpass = subpass; // <--
 		createInfo.basePipelineHandle = VK_NULL_HANDLE;
 		createInfo.basePipelineIndex = -1;
 
 		pipeline = VK_NULL_HANDLE;
 		VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &createInfo, nullptr, &pipeline));
+		assert(pipeline);
 	}
 
-	
 	void GraphicsPipeline::Destroy(VkDevice device)
 	{
 		vertShader.Cleanup(device);
@@ -210,6 +235,8 @@ namespace Niagara
 	}
 
 
+	/// Compute pipeline
+
 	void ComputePipeline::Init(VkDevice device)
 	{
 		Pipeline::Init(device);
@@ -217,9 +244,9 @@ namespace Niagara
 		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, g_PushDescriptorsSupported);
 		assert(descriptorUpdateTemplate);
 		this->descriptorUpdateTemplate = descriptorUpdateTemplate;
-	}
 
-	/// Compute pipeline
+		// TODO...
+	}
 
 	void ComputePipeline::Destroy(VkDevice device)
 	{
