@@ -98,12 +98,6 @@ layout (location = 2)
 perprimitiveNV out vec3 triangleNormals[];
 #endif
 
-bool ConeCull(vec4 cone, vec3 viewDir)
-{
-	float VdotCone = dot(-viewDir, cone.xyz);
-	float threshold = sqrt(1.0 - cone.w * cone.w);
-	return cone.w < 0 ? VdotCone >  threshold : VdotCone < -threshold;
-}
 
 // Set the number of threads per workgroup (always one-dimensional)
 layout (local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
@@ -120,15 +114,6 @@ void main()
 	const uint vertexCount = uint(meshlets[meshletIndex].vertexCount);
 	const uint triangleCount = uint(meshlets[meshletIndex].triangleCount);
 	const uint indexCount = triangleCount * 3;
-
-#if 0
-	if (localThreadId == 0)
-	if (ConeCull(meshlets[meshletIndex].cone, vec3(0, 0, 1)))
-	{
-		gl_PrimitiveCountNV = 0;
-		return;
-	}
-#endif
 
 	vec3 meshletColor = IntToColor(meshletIndex);
 

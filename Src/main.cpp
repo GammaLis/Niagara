@@ -1508,7 +1508,8 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, V
 
 	// Rasterization state
 	auto &rasterizationState = pipelineState.rasterizationState;
-	// rasterizationState.cullMode = VK_CULL_MODE_NONE;
+	// >>> DEBUG:
+	// rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
 #if FLIP_VIEWPORT
 	rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 #endif
