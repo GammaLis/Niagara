@@ -205,6 +205,9 @@
     <ClInclude Include="Swapchain.h" />
     <ClInclude Include="Utilities.h" />
     <ClInclude Include="VkInitializers.h" />
+    <CustomBuild Include="..\Shaders\SimpleMesh.task.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">

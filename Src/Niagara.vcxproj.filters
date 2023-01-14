@@ -220,6 +220,9 @@
     <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="..\Shaders\SimpleMesh.task.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Shaders\MeshCommon.h">

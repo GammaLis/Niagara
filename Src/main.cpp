@@ -27,6 +27,7 @@
 #define FAST_OBJ_IMPLEMENTATION
 #include "fast_obj.h"
 
+
 /// Custom settings
 #define DRAW_SIMPLE_TRIANGLE 0
 #define DRAW_SIMPLE_MESH 1
@@ -35,8 +36,9 @@
 
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
-#define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_MESHLETS 1
+#define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
+#define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
 // Mesh shader needs the 8bit_16bit_extension
 
 
@@ -93,6 +95,9 @@ const std::vector<const char*> g_DeviceExtensions =
 	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
 	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
 	VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+
+	// VK 1.3
+	VK_KHR_MAINTENANCE_4_EXTENSION_NAME,
 
 #if USE_MESHLETS
 	VK_NV_MESH_SHADER_EXTENSION_NAME,
@@ -1473,6 +1478,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, V
 
 	// Pipeline shaders
 #if USE_MESHLETS
+	pipeline.taskShader.Load(device, "./CompiledShaders/SimpleMesh.task.spv");
 	pipeline.meshShader.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
 #else
 	pipeline.vertShader.Load(device, "./CompiledShaders/SimpleMesh.vert.spv");
@@ -1502,6 +1508,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, V
 
 	// Rasterization state
 	auto &rasterizationState = pipelineState.rasterizationState;
+	// rasterizationState.cullMode = VK_CULL_MODE_NONE;
 #if FLIP_VIEWPORT
 	rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 #endif
@@ -1584,8 +1591,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 	vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
 
 #if USE_MESHLETS
-	uint32_t nTtask = static_cast<uint32_t>(mesh.meshlets.size());
-	vkCmdDrawMeshTasksNV(cmd, nTtask, 0);
+	uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
+	vkCmdDrawMeshTasksNV(cmd, (nTask + 31) / 32, 0);
 
 #else
 	uint32_t nVertex = static_cast<uint32_t>(vb.size / sizeof(Vertex));
@@ -1890,6 +1897,51 @@ void BuildMeshlets(Mesh& mesh)
 		mesh.meshlets.push_back(meshlet);
 }
 
+void BuildMeshletCones(Mesh &mesh)
+{
+	for (auto &meshlet : mesh.meshlets)
+	{
+		glm::vec3 normals[MESHLET_MAX_PRIMITIVES];
+		for (uint32_t i = 0; i < meshlet.triangleCount; ++i)
+		{
+			uint32_t i0 = meshlet.indices[3 * i + 0];
+			uint32_t i1 = meshlet.indices[3 * i + 1];
+			uint32_t i2 = meshlet.indices[3 * i + 2];
+
+			const Vertex &v0 = mesh.vertices[meshlet.vertices[i0]];
+			const Vertex &v1 = mesh.vertices[meshlet.vertices[i1]];
+			const Vertex &v2 = mesh.vertices[meshlet.vertices[i2]];
+
+			glm::vec3 p0{ Niagara::ToFloat(v0.p.x),  Niagara::ToFloat(v0.p.y) , Niagara::ToFloat(v0.p.z) };
+			glm::vec3 p1{ Niagara::ToFloat(v1.p.x),  Niagara::ToFloat(v1.p.y) , Niagara::ToFloat(v1.p.z) };
+			glm::vec3 p2{ Niagara::ToFloat(v2.p.x),  Niagara::ToFloat(v2.p.y) , Niagara::ToFloat(v2.p.z) };
+
+			glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+
+			normals[i] = Niagara::SafeNormalize(n);
+		}
+
+		glm::vec3 avgNormal{};
+		for (uint32_t i = 0; i < meshlet.triangleCount; ++i)
+			avgNormal += normals[i];
+		float n = sqrtf(avgNormal.x * avgNormal.x + avgNormal.y * avgNormal.y + avgNormal.z * avgNormal.z);
+		if (n < Niagara::EPS)
+			avgNormal = glm::vec3(1.0f, 0.0f, 0.0f);
+		else
+			avgNormal = avgNormal / (n);
+
+		float minDot = 1.0f;
+		for (uint32_t i = 0; i < meshlet.triangleCount; ++i)
+		{
+			float dot = normals[i].x * avgNormal.x + normals[i].y * avgNormal.y + normals[i].z * avgNormal.z;
+			if (dot < minDot)
+				minDot = dot;
+		}
+
+		meshlet.cone = glm::vec4(avgNormal, minDot);
+	}
+}
+
 uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties)
 {
 	for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
@@ -1983,31 +2035,41 @@ int main()
 
 	// Device extensions
 	void* pNextChain = nullptr;
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS || USE_MESHLETS
+
 	void** pNext = &pNextChain;
-
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS 
-	VkPhysicalDevice8BitStorageFeatures features8Bit{};
-	features8Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
-	features8Bit.storageBuffer8BitAccess = true;
-
-	VkPhysicalDevice16BitStorageFeatures features16Bit{};
-	features16Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
-	features16Bit.storageBuffer16BitAccess = true;
-
-	*pNext = &features16Bit;
-	features16Bit.pNext = &features8Bit;
-	pNext = &features8Bit.pNext;
-#endif
 
 #if USE_MESHLETS
 	VkPhysicalDeviceMeshShaderFeaturesNV featureMeshShader{};
 	featureMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV;
-	featureMeshShader.meshShader = true;
+	featureMeshShader.meshShader = VK_TRUE;
+	featureMeshShader.taskShader = VK_TRUE;
 
 	*pNext = &featureMeshShader;
+	pNext = &featureMeshShader.pNext;
 #endif
 
+#if USE_DEVICE_8BIT_16BIT_EXTENSIONS 
+	VkPhysicalDevice8BitStorageFeatures features8Bit{};
+	features8Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
+	features8Bit.storageBuffer8BitAccess = VK_TRUE;
+
+	VkPhysicalDevice16BitStorageFeatures features16Bit{};
+	features16Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+	features16Bit.storageBuffer16BitAccess = VK_TRUE;
+
+	features16Bit.pNext = &features8Bit;
+
+	*pNext = &features16Bit;
+	pNext = &features8Bit.pNext;
+#endif
+
+#if USE_DEVICE_MAINTENANCE4_EXTENSIONS
+	VkPhysicalDeviceMaintenance4Features featureMaintenance4{};
+	featureMaintenance4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES;
+	featureMaintenance4.maintenance4 = VK_TRUE;
+
+	*pNext = &featureMaintenance4;
+	pNext = &featureMaintenance4.pNext;
 #endif
 
 	Niagara::Device device{};
@@ -2062,6 +2124,7 @@ int main()
 #if USE_MESHLETS
 	// Meshlets
 	BuildMeshlets(mesh);
+	BuildMeshletCones(mesh);
 #endif
 
 	VkMemoryPropertyFlags hostVisibleMemPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
