@@ -29,6 +29,11 @@ layout (std430, binding = 1) buffer Meshlets
 	Meshlet meshlets[];
 };
 
+layout (binding = 2) buffer MeshletData
+{
+	uint meshletData[];
+};
+
 in taskNV block
 {
 	uint meshletIndices[GROUP_SIZE];
@@ -115,12 +120,15 @@ void main()
 	const uint triangleCount = uint(meshlets[meshletIndex].triangleCount);
 	const uint indexCount = triangleCount * 3;
 
+	const uint vertexOffset = meshlets[meshletIndex].vertexOffset;
+	const uint indexOffset = vertexOffset + vertexCount;
+
 	vec3 meshletColor = IntToColor(meshletIndex);
 
 	// Vertices
 	for (uint i = localThreadId; i < vertexCount; i += GROUP_SIZE)
 	{
-		uint vi = meshlets[meshletIndex].vertices[i];
+		uint vi = meshletData[vertexOffset + i];
 
 		vec3 position = vec3(vertices[vi].px, vertices[vi].py, vertices[vi].pz);
 		vec3 normal = vec3(uint(vertices[vi].nx), uint(vertices[vi].ny), uint(vertices[vi].nz)) / 127.0 - 1.0;
@@ -138,10 +146,19 @@ void main()
 	// SetMeshOutputEXT();
 
 	// Primitives
+#if 0
 	for (uint i = localThreadId; i < indexCount; i += GROUP_SIZE)
 	{
 		gl_PrimitiveIndicesNV[i] = meshlets[meshletIndex].indices[i];
 	}
+#else
+	uint indexGroupCount = (indexCount + 3) / 4;
+	for (uint i = localThreadId; i < indexGroupCount; i += GROUP_SIZE)
+	{
+		writePackedPrimitiveIndices4x8NV(i * 4, meshletData[indexOffset + i]);
+	}
+	
+#endif
 
 #if USE_PER_PRIMITIVE
 	for (uint i = localThreadId; i < triangleCount; i += GROUP_SIZE)

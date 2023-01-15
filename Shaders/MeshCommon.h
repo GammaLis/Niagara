@@ -17,12 +17,12 @@
 
 struct Vertex
 {
+	float px, py, pz;
 #if USE_8BIT_16BIT_EXTENSIONS
-	float16_t px, py, pz;
+	// float16_t px, py, pz;
 	uint8_t nx, ny, nz, nw;
 	float16_t s, t;
 #else
-	float px, py, pz;
 	float nx, ny, nz;
 	float s, t;
 #endif
@@ -32,8 +32,7 @@ struct Vertex
 struct Meshlet
 {
 	vec4 cone;
-	uint vertices[MAX_VERTICES];
-	uint8_t indices[MAX_PRIMITIVES*3]; // up to MAX_PRIMITIVES triangels
+	uint32_t vertexOffset;
 	uint8_t vertexCount;
 	uint8_t triangleCount;
 };

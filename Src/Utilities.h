@@ -33,6 +33,16 @@ namespace Niagara
 		}
 	}
 
+	inline int DivideAndRoundUp(int dividend, int divisor)
+	{
+		return (dividend + divisor - 1) / divisor;
+	}
+
+	inline int DivideAndRoundDown(int dividend, int divisor)
+	{
+		return dividend / divisor;
+	}
+
 	inline glm::vec3 SafeNormalize(const glm::vec3 &v)
 	{
 		float n = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);

@@ -17,24 +17,24 @@ struct Vertex
 {
 #if !VERTEX_ALIGNMENT
 
+    vec3 position;
 #if USE_8BIT_16BIT_EXTENSIONS
-    f16vec3 position;
+    // f16vec3 position;
     u8vec4 normal;
     f16vec2 texcoord0;
 #else
-    vec3 position;
     vec3 normal;
     vec2 texcoord0;
 #endif
 
 #else
 
+    float px, py, pz;
 #if USE_8BIT_16BIT_EXTENSIONS
-    float16_t px, py, pz;
+    // float16_t px, py, pz;
     uint8_t nx, ny, nz, nw;
     float16_t s, t;
 #else
-    float px, py, pz;
     float nx, ny, nz;
     float s, t;
 #endif
