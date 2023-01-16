@@ -1,7 +1,6 @@
 #include "Shaders.h"
 #include "Utilities.h"
 #include <spirv-headers/spirv.h>
-#include <spirv_cross/spirv.h>
 
 // Ref: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 

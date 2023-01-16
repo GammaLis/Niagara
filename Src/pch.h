@@ -5,7 +5,7 @@
 #include <array>
 #include <set>
 #include <cassert>
-#include <optional>
+#include <system_error>
 #include <cstdint>
 #include <limits>		// std::numeric_limits
 #include <algorithm>	// std::clamp

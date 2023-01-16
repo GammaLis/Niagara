@@ -6,6 +6,7 @@
 #include "Swapchain.h"
 #include "Shaders.h"
 #include "Pipeline.h"
+#include "Image.h"
 #include "Utilities.h"
 
 #include <iostream>

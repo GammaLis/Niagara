@@ -13,3 +13,9 @@
 [submodule "External/fast_obj"]
 	path = External/fast_obj
 	url = https://github.com/thisistherk/fast_obj.git
+[submodule "External/SPIRV-Cross"]
+	path = External/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross.git
+[submodule "External/VulkanMemoryAllocator"]
+	path = External/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git

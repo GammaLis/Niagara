@@ -106,7 +106,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_GLFW_WIN32;VK_USE_PLATFORM_WIN32_KHR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\glfw\include;..\External\glm;..\External\volk;..\External\fast_obj;..\External\meshoptimizer\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\volk;..\External\glfw\include;..\External\glm;..\External\SPIRV-Cross;..\External\fast_obj;..\External\meshoptimizer\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -183,6 +183,7 @@
     <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp" />
     <ClCompile Include="..\External\volk\volk.c" />
     <ClCompile Include="Device.cpp" />
+    <ClCompile Include="Image.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Pipeline.cpp" />
     <ClCompile Include="Shaders.cpp" />
@@ -199,6 +200,7 @@
     <ClInclude Include="..\External\volk\volk.h" />
     <None Include="..\Shaders\MeshCommon.h" />
     <ClInclude Include="Device.h" />
+    <ClInclude Include="Image.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Pipeline.h" />
     <ClInclude Include="Shaders.h" />

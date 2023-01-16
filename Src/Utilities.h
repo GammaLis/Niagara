@@ -1,3 +1,5 @@
+// Ref: Vulkan-samples
+
 #pragma once
 
 #include "pch.h"
@@ -6,6 +8,8 @@
 
 namespace Niagara
 {
+	/// Files
+
 	std::vector<char> ReadFile(const std::string& fileName);
 
 
@@ -48,4 +52,35 @@ namespace Niagara
 		float n = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 		return (n < EPS) ? glm::vec3(0.0f) : v / n;
 	}
+
+
+	/// Vulkan
+
+	// Determine if a Vulkan format is depth only.
+	inline bool IsDepthOnlyFormat(VkFormat format)
+	{
+		return format == VK_FORMAT_D16_UNORM || format == VK_FORMAT_D32_SFLOAT;
+	}
+
+	// Determine if a Vulkan format is depth or stencil
+	inline bool IsDepthStencilFormat(VkFormat format)
+	{
+		return format == VK_FORMAT_D16_UNORM_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+			IsDepthOnlyFormat(format);
+	}
+
+	// Determine if a Vulkan descriptor type is a dynamic storage buffer or dynamic uniform buffer.
+	inline bool IsDynamicBufferDescriptorType(VkDescriptorType descriptorType)
+	{
+		return descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC || descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+	}
+
+	// Determine if a Vulkan descriptor type is a buffer (either uniform or storage buffer, dynmaic or not).
+	inline bool IsBufferDescriptorType(VkDescriptorType descriptorType)
+	{
+		return descriptorType  == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+			IsDynamicBufferDescriptorType(descriptorType);
+	}
+
+	uint32_t BitsPerPixel(VkFormat format);
 }
