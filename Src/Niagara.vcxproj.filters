@@ -25,6 +25,9 @@
     <Filter Include="meshoptimizer">
       <UniqueIdentifier>{c99410bc-4ea3-461d-a8cc-5903949d928d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="spirv-cross">
+      <UniqueIdentifier>{0171d7b6-935c-4c33-8e88-8c8f081e542e}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -162,6 +165,27 @@
     <ClCompile Include="Image.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cpp.cpp">
+      <Filter>spirv-cross</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cross.cpp">
+      <Filter>spirv-cross</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_glsl.cpp">
+      <Filter>spirv-cross</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_parser.cpp">
+      <Filter>spirv-cross</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cross_parsed_ir.cpp">
+      <Filter>spirv-cross</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cfg.cpp">
+      <Filter>spirv-cross</Filter>
+    </ClCompile>
+    <ClCompile Include="SpirvReflection.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -207,6 +231,27 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Image.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cpp.hpp">
+      <Filter>spirv-cross</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cross.hpp">
+      <Filter>spirv-cross</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_glsl.hpp">
+      <Filter>spirv-cross</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_parser.hpp">
+      <Filter>spirv-cross</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cross_parsed_ir.hpp">
+      <Filter>spirv-cross</Filter>
+    </ClInclude>
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cfg.hpp">
+      <Filter>spirv-cross</Filter>
+    </ClInclude>
+    <ClInclude Include="SpirvReflection.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

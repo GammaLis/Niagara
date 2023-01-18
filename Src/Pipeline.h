@@ -1,7 +1,10 @@
+#pragma once
+
 #include "pch.h"
 #include "Shaders.h"
+#include <unordered_map>
 
-// Ref: 
+// Ref: nvpro-core
 
 namespace Niagara
 {
@@ -146,6 +149,7 @@ namespace Niagara
 	class Pipeline
 	{
 	public:
+		static constexpr uint32_t s_MaxDescrptorSetNum = 4;
 		static constexpr uint32_t s_MaxDescriptorNum = 32;
 
 		Pipeline() = default;
@@ -153,28 +157,36 @@ namespace Niagara
 
 		VkPipeline pipeline = VK_NULL_HANDLE;
 		VkPipelineLayout layout = VK_NULL_HANDLE;
-		VkRenderPass renderPass = VK_NULL_HANDLE;
 
+		VkRenderPass renderPass = VK_NULL_HANDLE;
 		uint32_t subpass = 0;
 
 		// Descriptors
-		VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+		std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
 		VkDescriptorUpdateTemplate descriptorUpdateTemplate = VK_NULL_HANDLE;
 
-		uint32_t descriptorCount = 0;
-		uint32_t descriptorMask = 0;
-		VkDescriptorType descriptorTypes[s_MaxDescriptorNum] = {};
-		uint32_t descriptorStart = 0, descriptorEnd = 0;
+		// TODO: Delete this
+		DescriptorSetInfo descriptorSetInfos[s_MaxDescrptorSetNum];
+
+		std::unordered_map<uint8_t, ShaderResource> shaderResourceMap;
+		std::unordered_map<uint8_t, std::vector<ShaderResource>> setResources;
+
+		void UpdateDescriptorSetInfo(DescriptorSetInfo &setInfo, uint32_t set = 0) const;
 
 		virtual void Init(VkDevice device);
 		virtual void Destroy(VkDevice device);
+
 		virtual std::vector<const Shader*> GetPipelineShaders() const = 0;
 		virtual bool ShadersValid() const = 0;
 
 		void GatherDescriptors();
+		void NewGatherDescriptors();
 		std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo() const;
+		std::vector<VkDescriptorSetLayoutBinding> GetDescriptorBindings(uint32_t set = 0) const;
+		std::vector<VkDescriptorUpdateTemplateEntry> GetDescriptorUpdateTemplateEntries(uint32_t set = 0) const;
 		VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported = true) const;
-		VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, bool pushDescriptorsSupported = true) const;
+		std::vector<VkDescriptorSetLayout> CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported = true) const;
+		VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setIndex = 0, bool pushDescriptorsSupported = true) const;
 		VkPipelineLayout CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported = true) const;
 	};
 

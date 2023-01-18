@@ -7,8 +7,12 @@ namespace Niagara
 	{
 		auto shaders = GetPipelineShaders();
 
-		descriptorCount = 0;
-		descriptorMask = 0;
+		auto &descriptorSetInfo = descriptorSetInfos[0];
+
+		descriptorSetInfo.start = s_MaxDescriptorNum;
+		descriptorSetInfo.count = 0;
+		descriptorSetInfo.mask = 0;
+		uint32_t setEnd = 0;
 		for (const auto& shader : shaders)
 		{
 			if (shader->resourceMask)
@@ -17,27 +21,63 @@ namespace Niagara
 				{
 					if (shader->resourceMask & (1 << i))
 					{
-						if (descriptorMask & (1 << i))
-							assert(descriptorTypes[i] == shader->resourceTypes[i]);
+						if (descriptorSetInfo.start == s_MaxDescriptorNum)
+							descriptorSetInfo.start = i;
+						setEnd = i + 1;
+
+						if (descriptorSetInfo.mask & (1 << i))
+							assert(descriptorSetInfo.types[i] == shader->resourceTypes[i]);
 						else
 						{
-							descriptorTypes[i] = shader->resourceTypes[i];
-							descriptorMask |= 1 << i;
+							descriptorSetInfo.types[i] = shader->resourceTypes[i];
+							descriptorSetInfo.mask |= 1 << i;
 						}
-						++descriptorCount;
 					}
 				}
 			}
 		}
 
-		descriptorStart = descriptorEnd = 0;
-		for (uint32_t i = 0; i < s_MaxDescriptorNum; ++i)
+		if (setEnd > 0)
+			descriptorSetInfo.count = setEnd - descriptorSetInfo.start;
+	}
+
+	void Pipeline::NewGatherDescriptors()
+	{
+		// Collect and combine all the shader resources from each of the shader modules
+		auto shaders = GetPipelineShaders();
+		for (const auto &shader : shaders)
 		{
-			if (descriptorMask & (1 << i))
+			if (!shader->IsValid()) continue;
+			
+			for (const auto &shaderResource : shader->resources)
 			{
-				if (descriptorEnd == 0) descriptorStart = i;
-				descriptorEnd = i + 1;
+				if (shaderResource.type == ShaderResourceType::Input || 
+					shaderResource.type == ShaderResourceType::InputAttachment || 
+					shaderResource.type == ShaderResourceType::Output ||
+					shaderResource.type == ShaderResourceType::PushConstant || // No binding point
+					shaderResource.type == ShaderResourceType::SpecializationConstant) // No binding point
+					continue;
+
+				uint8_t key = (shaderResource.set << 6u) | shaderResource.binding;
+
+				auto it = shaderResourceMap.find(key);
+				if (it != shaderResourceMap.end())
+					it->second.stages |= shaderResource.stages;
+				else
+					shaderResourceMap.emplace(key, shaderResource);
 			}
+		}
+
+		// Separate them into their respective sets
+		for (const auto &kvp : shaderResourceMap)
+		{
+			const auto &shaderResource = kvp.second;
+
+			auto it = setResources.find(shaderResource.set);
+			if (it != setResources.end())
+				it->second.push_back(shaderResource);
+			else
+				setResources.emplace(shaderResource.set, std::vector<ShaderResource>{ shaderResource });			
 		}
 	}
 
@@ -47,15 +87,15 @@ namespace Niagara
 
 		VkPipelineShaderStageCreateInfo shaderStageCreateInfo{};
 		shaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-		shaderStageCreateInfo.pName = "main";
-
+		
 		auto shaders = GetPipelineShaders();
 		for (const auto& shader : shaders)
 		{
-			if (shader->module != VK_NULL_HANDLE)
+			if (shader->IsValid())
 			{
 				shaderStageCreateInfo.module = shader->module;
 				shaderStageCreateInfo.stage = shader->stage;
+				shaderStageCreateInfo.pName = shader->entryPoint.c_str();
 
 				shaderStagesCreateInfo.push_back(shaderStageCreateInfo);
 			}
@@ -64,11 +104,59 @@ namespace Niagara
 		return shaderStagesCreateInfo;
 	}
 
+	std::vector<VkDescriptorSetLayoutBinding> Pipeline::GetDescriptorBindings(uint32_t set) const
+	{
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings;
+
+		const auto it = setResources.find(set);
+
+		if (it == setResources.end())
+			return setLayoutBindings;
+
+		for (const auto& resource : it->second)
+		{
+			VkDescriptorSetLayoutBinding setBinding{};
+			setBinding.binding = resource.binding;
+			setBinding.descriptorType = GetDescriptorType(resource.type);
+			setBinding.descriptorCount = resource.arraySize;
+			setBinding.stageFlags = resource.stages;
+
+			setLayoutBindings.push_back(setBinding);
+		}
+
+		return setLayoutBindings;
+	}
+
+	std::vector<VkDescriptorUpdateTemplateEntry> Pipeline::GetDescriptorUpdateTemplateEntries(uint32_t set) const
+	{
+		std::vector<VkDescriptorUpdateTemplateEntry> entries;
+
+		const auto it = setResources.find(set);
+
+		if (it == setResources.end())
+			return entries;
+
+		for (const auto& resource : it->second)
+		{
+			VkDescriptorUpdateTemplateEntry entry{};
+			entry.dstBinding = resource.binding;
+			entry.descriptorType = GetDescriptorType(resource.type);
+			entry.descriptorCount = resource.arraySize;
+			entry.dstArrayElement = 0;
+			entry.stride = sizeof(DescriptorInfo);
+			entry.offset = entry.stride * resource.binding;
+
+			entries.push_back(entry);
+		}
+
+		return entries;
+	}
+
 	VkDescriptorSetLayout Pipeline::CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported) const
 	{
 		auto shaders = GetPipelineShaders();
 
-		std::vector<VkDescriptorSetLayoutBinding> setBindings = Shader::GetSetBindings(shaders, descriptorTypes, descriptorMask);
+		std::vector<VkDescriptorSetLayoutBinding> setBindings = Shader::GetSetBindings(shaders, descriptorSetInfos[0].types, descriptorSetInfos[0].mask);
 
 		VkDescriptorSetLayoutCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -82,18 +170,40 @@ namespace Niagara
 		return setLayout;
 	}
 
-	VkDescriptorUpdateTemplate Pipeline::CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, bool pushDescriptorsSupported) const
+	std::vector<VkDescriptorSetLayout> Pipeline::CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported) const
 	{
-		auto shaders = GetPipelineShaders();
+		std::vector<VkDescriptorSetLayout> setLayouts(setResources.size());
 
-		std::vector<VkDescriptorUpdateTemplateEntry> entries = Shader::GetUpdateTemplateEntries(shaders);
+		for (const auto &kvp : setResources)
+		{
+			auto setLayoutBindings = GetDescriptorBindings(kvp.first);
+
+			VkDescriptorSetLayoutCreateInfo createInfo{};
+			createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+			createInfo.pBindings = setLayoutBindings.data();
+			createInfo.bindingCount = static_cast<uint32_t>(setLayoutBindings.size());
+			createInfo.flags = pushDescriptorsSupported ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+
+			VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+			VK_CHECK(vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &setLayout));
+			assert(setLayout);
+
+			setLayouts[kvp.first] = setLayout;
+		}
+
+		return setLayouts;
+	}
+
+	VkDescriptorUpdateTemplate Pipeline::CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setLayoutIndex, bool pushDescriptorsSupported) const
+	{
+		std::vector<VkDescriptorUpdateTemplateEntry> entries = GetDescriptorUpdateTemplateEntries(setLayoutIndex);
 
 		VkDescriptorUpdateTemplateCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
 		createInfo.pDescriptorUpdateEntries = entries.data();
 		createInfo.descriptorUpdateEntryCount = static_cast<uint32_t>(entries.size());
 		createInfo.templateType = pushDescriptorsSupported ? VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR : VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
-		createInfo.descriptorSetLayout = pushDescriptorsSupported ? nullptr : descriptorSetLayout;
+		createInfo.descriptorSetLayout = pushDescriptorsSupported ? nullptr : descriptorSetLayouts.at(setLayoutIndex);
 		createInfo.pipelineLayout = layout;
 		createInfo.pipelineBindPoint = bindPoint;
 
@@ -107,8 +217,8 @@ namespace Niagara
 	{
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
 		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutCreateInfo.setLayoutCount = 1;
-		pipelineLayoutCreateInfo.pSetLayouts = &descriptorSetLayout;
+		pipelineLayoutCreateInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+		pipelineLayoutCreateInfo.pSetLayouts = descriptorSetLayouts.data();
 		pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
 		pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -141,16 +251,47 @@ namespace Niagara
 		dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
 	}
 
+
+	/// Pipeline
+
+	void Pipeline::UpdateDescriptorSetInfo(DescriptorSetInfo& setInfo, uint32_t set) const
+	{
+		auto it = setResources.find(set);
+
+		if (it == setResources.end()) return;
+
+		const auto& shaderResources = it->second;
+		setInfo.mask = 0;
+		setInfo.start = s_MaxDescriptorNum;
+		uint32_t setEnd = 0;
+		for (const auto& resource : shaderResources)
+		{
+			setInfo.start = std::min(setInfo.start, resource.binding);
+			setEnd = std::max(resource.binding + 1, setEnd);
+
+			setInfo.mask |= (1 << resource.binding);
+			setInfo.types[resource.binding] = GetDescriptorType(resource.type);
+		}
+
+		setInfo.count = setEnd - setInfo.start;
+	}
+
 	void Pipeline::Init(VkDevice device)
 	{
 		assert(ShadersValid());
 
+#if USE_SPIRV_CROSS
+		NewGatherDescriptors();
+
+		this->descriptorSetLayouts = CreateDescriptorSetLayouts(device, g_PushDescriptorsSupported);
+
+#else
 		GatherDescriptors();
 
-		auto descriptorSetLayout = CreateDescriptorSetLayout(device, g_PushDescriptorsSupported);
-		assert(descriptorSetLayout);
-		this->descriptorSetLayout = descriptorSetLayout;
-
+		auto&& descriptorSetLayout = CreateDescriptorSetLayout(device, g_PushDescriptorsSupported);
+		this->descriptorSetLayouts.emplace_back(descriptorSetLayout);
+#endif
+		
 		auto pipelineLayout = CreatePipelineLayout(device, g_PushDescriptorsSupported);
 		assert(pipelineLayout);
 		this->layout = pipelineLayout;
@@ -158,10 +299,12 @@ namespace Niagara
 
 	void Pipeline::Destroy(VkDevice device)
 	{
-		if (descriptorSetLayout)
+		if (!descriptorSetLayouts.empty())
 		{
-			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-			descriptorSetLayout = VK_NULL_HANDLE;
+			for (const auto &descriptorSetLayout : descriptorSetLayouts)
+				vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+
+			descriptorSetLayouts.clear();
 		}
 		if (descriptorUpdateTemplate)
 		{
@@ -193,7 +336,7 @@ namespace Niagara
 	{
 		Pipeline::Init(device);
 
-		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, g_PushDescriptorsSupported);
+		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, g_PushDescriptorsSupported);
 		assert(descriptorUpdateTemplate);
 		this->descriptorUpdateTemplate = descriptorUpdateTemplate;
 
@@ -241,7 +384,7 @@ namespace Niagara
 	{
 		Pipeline::Init(device);
 
-		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, g_PushDescriptorsSupported);
+		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, 0, g_PushDescriptorsSupported);
 		assert(descriptorUpdateTemplate);
 		this->descriptorUpdateTemplate = descriptorUpdateTemplate;
 

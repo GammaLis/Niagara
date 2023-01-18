@@ -181,12 +181,19 @@
     <ClCompile Include="..\External\meshoptimizer\src\vertexfilter.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\vfetchanalyzer.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\vfetchoptimizer.cpp" />
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cfg.cpp" />
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cpp.cpp" />
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cross.cpp" />
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_cross_parsed_ir.cpp" />
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_glsl.cpp" />
+    <ClCompile Include="..\External\SPIRV-Cross\spirv_parser.cpp" />
     <ClCompile Include="..\External\volk\volk.c" />
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="Image.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Pipeline.cpp" />
     <ClCompile Include="Shaders.cpp" />
+    <ClCompile Include="SpirvReflection.cpp" />
     <ClCompile Include="Swapchain.cpp" />
     <ClCompile Include="Utilities.cpp" />
   </ItemGroup>
@@ -197,6 +204,12 @@
     <ClInclude Include="..\External\glfw\src\win32_thread.h" />
     <ClInclude Include="..\External\glfw\src\win32_time.h" />
     <ClInclude Include="..\External\meshoptimizer\src\meshoptimizer.h" />
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cfg.hpp" />
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cpp.hpp" />
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cross.hpp" />
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_cross_parsed_ir.hpp" />
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_glsl.hpp" />
+    <ClInclude Include="..\External\SPIRV-Cross\spirv_parser.hpp" />
     <ClInclude Include="..\External\volk\volk.h" />
     <None Include="..\Shaders\MeshCommon.h" />
     <ClInclude Include="Device.h" />
@@ -204,6 +217,7 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="Pipeline.h" />
     <ClInclude Include="Shaders.h" />
+    <ClInclude Include="SpirvReflection.h" />
     <ClInclude Include="Swapchain.h" />
     <ClInclude Include="Utilities.h" />
     <ClInclude Include="VkInitializers.h" />

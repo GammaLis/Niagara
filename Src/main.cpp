@@ -174,35 +174,29 @@ namespace Niagara
 	class CommandContext
 	{
 	private:
-		uint32_t descriptorMask = 0;
-		VkDescriptorType descriptorTypes[Pipeline::s_MaxDescriptorNum] = {};
-		uint32_t descriptorCount = 0;
-		uint32_t descriptorStart = 0, descriptorEnd = 0;
-		VkPipelineBindPoint pipelineBindPoint = (VkPipelineBindPoint)0;
-
-		// Caches
 		VkCommandBuffer cachedCommandBuffer = VK_NULL_HANDLE;
 		VkRenderPass cachedRenderPass = VK_NULL_HANDLE;
 
+		VkPipelineBindPoint pipelineBindPoint = (VkPipelineBindPoint)0;
+
+		// TODO: Are these needed ? 
 		VkPipelineLayout cachedPipelineLayout = VK_NULL_HANDLE;
 		VkDescriptorUpdateTemplate cachedDescriptorUpdateTemplate = VK_NULL_HANDLE;
-		VkDescriptorSetLayout cachedDescriptorSetLayout = VK_NULL_HANDLE;
-		DescriptorInfo cachedDescriptorInfos[Pipeline::s_MaxDescriptorNum] = {};
-		VkWriteDescriptorSet cachedWriteDescriptorSets[Pipeline::s_MaxDescriptorNum] = {};
+		std::vector<VkDescriptorSetLayout> cachedDescriptorSetLayouts;
 
-		void UpdateDescriptorInfo(const Pipeline& pipeline)
+		DescriptorSetInfo descriptorSetInfos[Pipeline::s_MaxDescrptorSetNum] = {};
+		DescriptorInfo cachedDescriptorInfos[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
+		VkWriteDescriptorSet cachedWriteDescriptorSets[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
+
+		void UpdateDescriptorSetInfo(const Pipeline& pipeline)
 		{
-			descriptorMask = pipeline.descriptorMask;
-			descriptorCount = pipeline.descriptorCount;
-			descriptorStart = pipeline.descriptorStart;
-			descriptorEnd = pipeline.descriptorEnd;
-
-			uint32_t length = sizeof(descriptorTypes);
-			memcpy_s(descriptorTypes, length, pipeline.descriptorTypes, length);
-
+			for (uint32_t i = 0; i < Pipeline::s_MaxDescrptorSetNum; ++i)
+				pipeline.UpdateDescriptorSetInfo(descriptorSetInfos[i], i);
+			
 			cachedPipelineLayout = pipeline.layout;
 
-			cachedDescriptorSetLayout = pipeline.descriptorSetLayout;
+			cachedDescriptorSetLayouts = pipeline.descriptorSetLayouts;
+
 			if (pipeline.descriptorUpdateTemplate)
 				cachedDescriptorUpdateTemplate = pipeline.descriptorUpdateTemplate;
 		}
@@ -254,7 +248,7 @@ namespace Niagara
 			pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 			vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
 
-			UpdateDescriptorInfo(pipeline);
+			UpdateDescriptorSetInfo(pipeline);
 		}
 
 		void BindPipeline(VkCommandBuffer cmd, const ComputePipeline& pipeline)
@@ -262,65 +256,72 @@ namespace Niagara
 			pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
 			vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
 
-			UpdateDescriptorInfo(pipeline);
+			UpdateDescriptorSetInfo(pipeline);
 		}
 
-		void SetDescriptor(uint32_t index, const DescriptorInfo& info)
+		void SetDescriptor(const DescriptorInfo& info, uint32_t binding, uint32_t set = 0)
 		{
-			assert(descriptorMask & (1 << index));
+			assert(descriptorSetInfos[set].mask & (1 << binding));
 			// TODO:
 			// assert(descriptorTypes[index] == buffer.Type)
-			cachedDescriptorInfos[index] = info;
+			cachedDescriptorInfos[set][binding] = info;
 		}
 
-		void SetDescriptor(uint32_t index, const VkWriteDescriptorSet& descriptor)
+		void SetDescriptor(const VkWriteDescriptorSet& descriptor, uint32_t binding, uint32_t set = 0)
 		{
-			assert(descriptorMask & (1 << index));
+			assert(descriptorSetInfos[set].mask & (1 << binding));
 
-			cachedWriteDescriptorSets[index] = descriptor;
+			cachedWriteDescriptorSets[set][binding] = descriptor;
 		}
 
-		std::vector<DescriptorInfo> GetDescriptorInfos() const
+		std::vector<DescriptorInfo> GetDescriptorInfos(uint32_t set = 0) const
 		{
-			if (descriptorEnd - descriptorStart == 0) return {};
+			std::vector<DescriptorInfo> descriptorInfos;
 
-			std::vector<DescriptorInfo> descriptorInfos(descriptorEnd - descriptorStart);
-			for (uint32_t i = descriptorStart; i < descriptorEnd; ++i)
+			const auto &descriptorSetInfo = descriptorSetInfos[set];
+
+			if (descriptorSetInfo.count == 0) 
+				return  descriptorInfos;
+
+			descriptorInfos.resize(descriptorSetInfo.count);
+			for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax; ++i)
 			{
-				if (descriptorMask & (1 << i))
-					descriptorInfos[i] = cachedDescriptorInfos[i];
+				if (descriptorSetInfo.mask & (1 << i))
+					descriptorInfos[i] = cachedDescriptorInfos[set][i];
 			}
 
 			return descriptorInfos;
 		}
 
-		std::vector<VkWriteDescriptorSet> GetDescriptorSets() const
+		std::vector<VkWriteDescriptorSet> GetDescriptorSets(uint32_t set = 0) const
 		{
 			std::vector<VkWriteDescriptorSet> descriptorSets;
 
-			for (uint32_t i = descriptorStart; i < descriptorEnd; ++i)
+			const auto &descriptorSetInfo = descriptorSetInfos[set];
+
+			for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax ; ++i)
 			{
-				if (descriptorMask & (1 << i))
+				if (descriptorSetInfo.mask & (1 << i))
 				{
-					descriptorSets.push_back(cachedWriteDescriptorSets[i]);
+					descriptorSets.push_back(cachedWriteDescriptorSets[set][i]);
 				}
 			}
 
 			return descriptorSets;
 		}
 
-		void PushDescriptorSetWithTemplate(VkCommandBuffer cmd)
+		void PushDescriptorSetWithTemplate(VkCommandBuffer cmd, uint32_t set = 0)
 		{
 			assert(cachedDescriptorUpdateTemplate);
 
-			auto descriptorInfos = GetDescriptorInfos();
-			vkCmdPushDescriptorSetWithTemplateKHR(cmd, cachedDescriptorUpdateTemplate, cachedPipelineLayout, 0, descriptorInfos.data());
+			auto descriptorInfos = GetDescriptorInfos(set);
+			vkCmdPushDescriptorSetWithTemplateKHR(cmd, cachedDescriptorUpdateTemplate, cachedPipelineLayout, set, descriptorInfos.data());
 		}
 
-		void PushDescriptorSet(VkCommandBuffer cmd)
+		void PushDescriptorSet(VkCommandBuffer cmd, uint32_t set = 0)
 		{
-			auto writeDescriptorSets = GetDescriptorSets();
-			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipelineLayout, 0, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
+			auto writeDescriptorSets = GetDescriptorSets(set);
+			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipelineLayout, set, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
 		}
 
 	};
@@ -986,17 +987,17 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 
 #if VERTEX_INPUT_MODE == 1
 	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size));
-	g_CommandContext.SetDescriptor(0, vbInfo);
+	g_CommandContext.SetDescriptor(vbInfo, 0);
 
 #if USE_MESHLETS
 	const auto& mb = bufferMgr.meshletBuffer;
 	const auto& meshletDataBuffer = bufferMgr.meshletDataBuffer;
 
 	auto mbInfo = Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size));
-	g_CommandContext.SetDescriptor(1, mbInfo);
+	g_CommandContext.SetDescriptor(mbInfo, 1);
 
 	auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshletDataBuffer.size));
-	g_CommandContext.SetDescriptor(2, meshletDataInfo);
+	g_CommandContext.SetDescriptor(meshletDataInfo, 2);
 #endif
 
 #endif

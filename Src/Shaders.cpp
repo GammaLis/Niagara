@@ -2,11 +2,41 @@
 #include "Utilities.h"
 #include <spirv-headers/spirv.h>
 
+#if USE_SPIRV_CROSS
+#include "SpirvReflection.h"
+#endif
+
 // Ref: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 
 
 namespace Niagara
 {
+	VkDescriptorType GetDescriptorType(ShaderResourceType resourceType, bool bDynamic)
+	{
+
+		switch (resourceType)
+		{
+		case ShaderResourceType::InputAttachment:
+			return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+		case ShaderResourceType::Image:
+			return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+		case ShaderResourceType::ImageSampler:
+			return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		case ShaderResourceType::ImageStorage:
+			return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		case ShaderResourceType::Sampler:
+			return VK_DESCRIPTOR_TYPE_SAMPLER;
+		case ShaderResourceType::BufferUniform:
+			return bDynamic ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		case ShaderResourceType::BufferStorage:
+			return bDynamic ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		default:
+			throw std::runtime_error("No conversion possible for the shader resource type.");
+			return VkDescriptorType(0);
+		}
+	}
+
+
 	VkShaderModule LoadShader(VkDevice device, const std::string& fileName)
 	{
 		std::vector<char> byteCode = ReadFile(fileName);
@@ -253,9 +283,13 @@ namespace Niagara
 		VK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule));
 		assert(shaderModule);
 
-		ParseShader(shader, pCode, codeSize/4);
-
 		shader.module = shaderModule;
+
+#if USE_SPIRV_CROSS
+		ReflectShaderInfos(shader, pCode, codeSize/4);
+#else
+		ParseShader(shader, pCode, codeSize/4);
+#endif
 
 		return true;
 	}
@@ -383,5 +417,13 @@ namespace Niagara
 
 		return updateTemplate;
 	}
+
+
+#if 0
+	std::vector<VkDescriptorSetLayoutBinding> GetSetBindings(const std::vector<const Shader*>& shaders)
+	{
+		// for (const auto &resource : shaders)
+	}
+#endif
 
 }
