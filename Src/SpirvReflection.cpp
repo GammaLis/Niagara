@@ -231,6 +231,7 @@ namespace Niagara
 			const auto &type = compiler.get_type_from_variable(resource.id);
 
 			uint32_t offset = std::numeric_limits<uint32_t>::max();
+
 			uint32_t numMemType = static_cast<uint32_t>(type.member_types.size());
 			for (uint32_t i = 0; i < numMemType; ++i)
 			{

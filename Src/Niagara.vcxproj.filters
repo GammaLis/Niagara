@@ -186,6 +186,9 @@
     <ClCompile Include="SpirvReflection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="CommandManager.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -252,6 +255,9 @@
       <Filter>spirv-cross</Filter>
     </ClInclude>
     <ClInclude Include="SpirvReflection.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="CommandManager.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

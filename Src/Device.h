@@ -57,6 +57,12 @@ namespace Niagara
 			uint32_t transfer;
 		} queueFamilyIndices;
 
+		Device(const Device&) = delete;
+		Device(Device&&) = delete;
+
+		Device& operator= (const Device&) = delete;
+		Device& operator= (Device&&) = delete;
+
 		bool Init(VkInstance instance, VkPhysicalDeviceFeatures enabledFeatures, const std::vector<const char*>& enabledExtensions, void* pNextChain, bool bUseSwapChain = true, VkQueueFlags requestedQueueTypes = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
 		void Destroy();
 
@@ -70,4 +76,6 @@ namespace Niagara
 		VkFormat GetSupportedDepthFormat(bool bCheckSamplingSupport);
 		bool IsExtensionSupported(const std::string &extension);
 	};
+
+	extern Device* g_Device;
 }

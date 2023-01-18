@@ -1,11 +1,13 @@
-// Ref: https://developer.nvidia.com/blog/introduction-turing-mesh-shaders/
+// Ref: https://vulkan-tutorial.com
 // Ref: https://github.com/KhronosGroup/Vulkan-Samples
+// Ref: https://developer.nvidia.com/blog/introduction-turing-mesh-shaders/
 
 #include "pch.h"
 #include "Device.h"
 #include "Swapchain.h"
 #include "Shaders.h"
 #include "Pipeline.h"
+#include "CommandManager.h"
 #include "Image.h"
 #include "Utilities.h"
 
@@ -75,6 +77,9 @@ VkDevice g_Device = VK_NULL_HANDLE;
 
 VkCommandPool g_CommandPool = VK_NULL_HANDLE;
 
+using Niagara::g_CommandMgr;
+using Niagara::g_CommandContext;
+
 // How many frames 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 // We choose the number of 2 because we don't want the CPU to get too far ahead of the GPU. With 2 frames in flight, the CPU and GPU
@@ -114,222 +119,7 @@ std::vector<VkDynamicState> g_DynamicStates =
 };
 
 
-/// Declarations
-
-uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-
 /// Structures
-
-/// Command manager
-namespace Niagara
-{
-	class CommandManager
-	{
-	public:
-		static VkCommandBuffer CreateCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY)
-		{
-			VkCommandBufferAllocateInfo allocInfo{};
-			allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-			allocInfo.commandPool = commandPool;
-			allocInfo.level = level;
-			allocInfo.commandBufferCount = 1;
-
-			VkCommandBuffer commandBuffer;
-			VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer));
-
-			return commandBuffer;
-		}
-
-		void Init(const Device& device)
-		{
-			commandPool = device.CreateCommandPool(device.queueFamilyIndices.graphics);
-
-			vkGetDeviceQueue(device, device.queueFamilyIndices.graphics, 0, &graphicsQueue);
-			vkGetDeviceQueue(device, device.queueFamilyIndices.compute, 0, &computeQueue);
-			vkGetDeviceQueue(device, device.queueFamilyIndices.transfer, 0, &transferQueue);
-		}
-
-		void Cleanup(const Device& device)
-		{
-			vkDestroyCommandPool(device, commandPool, nullptr);
-		}
-
-		VkCommandBuffer GetCommandBuffer(const Device& device)
-		{
-			VkCommandBuffer cmd = CreateCommandBuffer(device, commandPool);
-			return cmd;
-		}
-
-		VkQueue graphicsQueue;
-		VkQueue computeQueue;
-		VkQueue transferQueue;
-
-		VkCommandPool commandPool;
-
-	private:
-		std::queue<VkCommandBuffer> m_CommandBuffers;
-	};
-
-	class CommandContext
-	{
-	private:
-		VkCommandBuffer cachedCommandBuffer = VK_NULL_HANDLE;
-		VkRenderPass cachedRenderPass = VK_NULL_HANDLE;
-
-		VkPipelineBindPoint pipelineBindPoint = (VkPipelineBindPoint)0;
-
-		// TODO: Are these needed ? 
-		VkPipelineLayout cachedPipelineLayout = VK_NULL_HANDLE;
-		VkDescriptorUpdateTemplate cachedDescriptorUpdateTemplate = VK_NULL_HANDLE;
-		std::vector<VkDescriptorSetLayout> cachedDescriptorSetLayouts;
-
-		DescriptorSetInfo descriptorSetInfos[Pipeline::s_MaxDescrptorSetNum] = {};
-		DescriptorInfo cachedDescriptorInfos[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
-		VkWriteDescriptorSet cachedWriteDescriptorSets[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
-
-		void UpdateDescriptorSetInfo(const Pipeline& pipeline)
-		{
-			for (uint32_t i = 0; i < Pipeline::s_MaxDescrptorSetNum; ++i)
-				pipeline.UpdateDescriptorSetInfo(descriptorSetInfos[i], i);
-			
-			cachedPipelineLayout = pipeline.layout;
-
-			cachedDescriptorSetLayouts = pipeline.descriptorSetLayouts;
-
-			if (pipeline.descriptorUpdateTemplate)
-				cachedDescriptorUpdateTemplate = pipeline.descriptorUpdateTemplate;
-		}
-
-	public:
-		void BeginCommandBuffer(VkCommandBuffer cmd, VkCommandBufferUsageFlags usage = 0)
-		{
-			VkCommandBufferBeginInfo beginInfo{};
-			beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			beginInfo.flags = usage;
-			beginInfo.pInheritanceInfo = nullptr;
-
-			VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
-
-			cachedCommandBuffer = cmd;
-		}
-
-		void EndCommandBuffer(VkCommandBuffer cmd)
-		{
-			VK_CHECK(vkEndCommandBuffer(cmd));
-
-			cachedCommandBuffer = VK_NULL_HANDLE;
-		}
-
-		void BeginRenderPass(VkCommandBuffer cmd, VkRenderPass renderPass, VkFramebuffer framebuffer, const VkRect2D& renderArea, const std::vector<VkClearValue>& clearValues)
-		{
-			VkRenderPassBeginInfo beginInfo{};
-			beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			beginInfo.renderPass = renderPass;
-			beginInfo.framebuffer = framebuffer;
-			beginInfo.renderArea = renderArea;
-			beginInfo.pClearValues = clearValues.data();
-			beginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-
-			vkCmdBeginRenderPass(cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-			cachedRenderPass = renderPass;
-		}
-
-		void EndRenderPass(VkCommandBuffer cmd)
-		{
-			vkCmdEndRenderPass(cmd);
-
-			cachedRenderPass = VK_NULL_HANDLE;
-		}
-
-		void BindPipeline(VkCommandBuffer cmd, const GraphicsPipeline& pipeline)
-		{
-			pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-			vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
-
-			UpdateDescriptorSetInfo(pipeline);
-		}
-
-		void BindPipeline(VkCommandBuffer cmd, const ComputePipeline& pipeline)
-		{
-			pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
-			vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
-
-			UpdateDescriptorSetInfo(pipeline);
-		}
-
-		void SetDescriptor(const DescriptorInfo& info, uint32_t binding, uint32_t set = 0)
-		{
-			assert(descriptorSetInfos[set].mask & (1 << binding));
-			// TODO:
-			// assert(descriptorTypes[index] == buffer.Type)
-			cachedDescriptorInfos[set][binding] = info;
-		}
-
-		void SetDescriptor(const VkWriteDescriptorSet& descriptor, uint32_t binding, uint32_t set = 0)
-		{
-			assert(descriptorSetInfos[set].mask & (1 << binding));
-
-			cachedWriteDescriptorSets[set][binding] = descriptor;
-		}
-
-		std::vector<DescriptorInfo> GetDescriptorInfos(uint32_t set = 0) const
-		{
-			std::vector<DescriptorInfo> descriptorInfos;
-
-			const auto &descriptorSetInfo = descriptorSetInfos[set];
-
-			if (descriptorSetInfo.count == 0) 
-				return  descriptorInfos;
-
-			descriptorInfos.resize(descriptorSetInfo.count);
-			for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax; ++i)
-			{
-				if (descriptorSetInfo.mask & (1 << i))
-					descriptorInfos[i] = cachedDescriptorInfos[set][i];
-			}
-
-			return descriptorInfos;
-		}
-
-		std::vector<VkWriteDescriptorSet> GetDescriptorSets(uint32_t set = 0) const
-		{
-			std::vector<VkWriteDescriptorSet> descriptorSets;
-
-			const auto &descriptorSetInfo = descriptorSetInfos[set];
-
-			for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax ; ++i)
-			{
-				if (descriptorSetInfo.mask & (1 << i))
-				{
-					descriptorSets.push_back(cachedWriteDescriptorSets[set][i]);
-				}
-			}
-
-			return descriptorSets;
-		}
-
-		void PushDescriptorSetWithTemplate(VkCommandBuffer cmd, uint32_t set = 0)
-		{
-			assert(cachedDescriptorUpdateTemplate);
-
-			auto descriptorInfos = GetDescriptorInfos(set);
-			vkCmdPushDescriptorSetWithTemplateKHR(cmd, cachedDescriptorUpdateTemplate, cachedPipelineLayout, set, descriptorInfos.data());
-		}
-
-		void PushDescriptorSet(VkCommandBuffer cmd, uint32_t set = 0)
-		{
-			auto writeDescriptorSets = GetDescriptorSets(set);
-			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipelineLayout, set, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
-		}
-
-	};
-}
-
-Niagara::CommandManager g_CommandMgr{};
-Niagara::CommandContext g_CommandContext{};
-
 
 struct Vertex
 {
@@ -446,12 +236,7 @@ struct GpuBuffer
 
 	static void Copy(const Niagara::Device &device, GpuBuffer &dstBuffer, const GpuBuffer &srcBuffer, VkDeviceSize size)
 	{
-		VkCommandBuffer cmd = g_CommandMgr.GetCommandBuffer(device);
-
-		VkCommandBufferBeginInfo cmdBeginInfo{};
-		cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-		cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-		VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+		VkCommandBuffer cmd = Niagara::BeginSingleTimeCommands();
 
 		VkBufferCopy copyRegion{};
 		copyRegion.srcOffset = 0;
@@ -459,21 +244,7 @@ struct GpuBuffer
 		copyRegion.size = size;
 		vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1, &copyRegion);
 
-		VK_CHECK(vkEndCommandBuffer(cmd));
-
-		VkSubmitInfo submitInfo{};
-		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &cmd;
-
-		vkQueueSubmit(g_CommandMgr.transferQueue, 1, &submitInfo, VK_NULL_HANDLE);
-		// Unlike the draw commands, there are no events we need to wait on this time. We just want to execute the transfer on the buffers immediately.
-		// We could use a fence and wait with `vkWaitForFences`, or simply wait for the transfer queue to become idle with `vkQueueWaitIdle`. A fence would allow
-		// you to schedule multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time. That may give
-		// the driver more opportunities to optimize.
-		vkQueueWaitIdle(g_CommandMgr.transferQueue);
-
-		vkFreeCommandBuffers(device, g_CommandMgr.commandPool, 1, &cmd);
+		Niagara::EndSingleTimeCommands(cmd);
 	}
 
 	void Init(const Niagara::Device &device, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
@@ -493,7 +264,9 @@ struct GpuBuffer
 		VkMemoryAllocateInfo allocInfo{};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = FindMemoryType(device.memoryProperties, memRequirements.memoryTypeBits, memoryFlags);
+		
+		VkBool32 memTypeFound = VK_FALSE;
+		allocInfo.memoryTypeIndex = device.GetMemoryType(memRequirements.memoryTypeBits, memoryFlags, &memTypeFound);
 
 		memory = VK_NULL_HANDLE;
 		VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));

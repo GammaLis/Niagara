@@ -14,6 +14,7 @@
 namespace Niagara
 {
 	/// Globals
+	Device* g_Device = nullptr;
 
 	bool g_PushDescriptorsSupported = true;
 
@@ -235,6 +236,9 @@ namespace Niagara
 	{
 		this->instance = instance;
 
+		// FIXME...
+		g_Device = this;
+
 		physicalDevice = CreatePhysicalDevice(instance);
 		if (!physicalDevice)
 		{
@@ -260,6 +264,8 @@ namespace Niagara
 
 		if (logicalDevice)
 			vkDestroyDevice(logicalDevice, nullptr);
+
+		g_Device = nullptr;
 	}
 
 	void Device::UpdatePhysicalDeviceProperties(VkPhysicalDevice physicalDevice)
@@ -523,7 +529,7 @@ namespace Niagara
 	VkFormat Device::GetSupportedDepthFormat(bool bCheckSamplingSupport)
 	{
 		// All depth formats may be optional, so we need to find a suitable depth format to use
-		std::vector<VkFormat> depthFormats
+		static std::vector<VkFormat> depthFormats
 		{
 			VK_FORMAT_D32_SFLOAT_S8_UINT,
 			VK_FORMAT_D32_SFLOAT,

@@ -1,12 +1,14 @@
 #include "Image.h"
+#include "Device.h"
 #include "Utilities.h"
+#include <iostream>
 
 
 namespace Niagara
 {
 	/// ImageView
 
-	void ImageView::Init(VkDevice device, Image& image, VkImageViewType viewType, uint32_t baseMipLevel, uint32_t baseArrayLayer, uint32_t mipLevels, uint32_t arrayLayers)
+	void ImageView::Init(const Device &device, Image& image, VkImageViewType viewType, uint32_t baseMipLevel, uint32_t baseArrayLayer, uint32_t mipLevels, uint32_t arrayLayers)
 	{
 		if (IsDepthStencilFormat(image.format))
 			subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -30,7 +32,7 @@ namespace Niagara
 		this->image = &image;
 	}
 
-	void ImageView::Destory(VkDevice device)
+	void ImageView::Destory(const Device &device)
 	{
 		if (view != VK_NULL_HANDLE)
 			vkDestroyImageView(device, view, nullptr);
@@ -71,9 +73,15 @@ namespace Niagara
 		return type;
 	}
 
-	void Image::Init(VkDevice device, const VkExtent3D& extent, VkFormat format, 
-		VkImageUsageFlags imageUsage, VkSampleCountFlagBits sampleCount, VkImageCreateFlags flags, 
-		uint32_t mipLevels, uint32_t arrayLayers, VkImageTiling tiling,
+	/**
+	* Tiling
+	* * VK_IMAGE_TILING_LINEAR: Texels are laid out in row-major order 
+	* * VK_IMAGE_TILING_OPTIMAL: Texels are laid out in an implementation defined order for optimal access
+	*/
+	void Image::Init(const Device &device, const VkExtent3D& extent, VkFormat format, 
+		VkImageUsageFlags imageUsage, VkImageCreateFlags flags, VkMemoryPropertyFlags memPropertyFlags,
+		uint32_t mipLevels, uint32_t arrayLayers,
+		VkSampleCountFlagBits sampleCount, VkImageTiling tiling,
 		const uint32_t* queueFamilies, uint32_t queueFamilyCount)
 	{
 		this->type = GetImageType(extent);
@@ -107,5 +115,54 @@ namespace Niagara
 
 		VK_CHECK(vkCreateImage(device, &createInfo, nullptr, &image));
 		assert(image);
+
+		VkMemoryRequirements memRequirements{};
+		vkGetImageMemoryRequirements(device, image, &memRequirements);
+
+		if (usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT)
+			memPropertyFlags = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		VkBool32 memTypeFound = VK_FALSE;
+		allocInfo.memoryTypeIndex = device.GetMemoryType(memRequirements.memoryTypeBits, memPropertyFlags, &memTypeFound);
+
+		VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));
+		assert(memory);
+
+		vkBindImageMemory(device, image, memory, 0);
+	}
+
+	void Image::Destroy(const Device& device)
+	{
+		if (memory != VK_NULL_HANDLE)
+		{
+			Unmap(device);
+			vkFreeMemory(device, memory, nullptr);
+		}
+		if (image != VK_NULL_HANDLE)
+			vkDestroyImage(device, image, nullptr);
+	}
+
+	uint8_t* Image::Map(const Device &device)
+	{
+		if (!mappedData)
+		{
+			if (tiling != VK_IMAGE_TILING_LINEAR)
+				std::cerr << "Mapping image memory that is not linear.\n";
+			
+			// vkMapMemory(device, memory, VkDeviceSize(0), )
+			isMapped = true;
+		}
+
+		return mappedData;
+	}
+
+	void Image::Unmap(const Device &device)
+	{
+		vkUnmapMemory(device, memory);
+		mappedData = nullptr;
+		isMapped = false;
 	}
 }

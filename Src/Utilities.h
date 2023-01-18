@@ -83,4 +83,9 @@ namespace Niagara
 	}
 
 	uint32_t BitsPerPixel(VkFormat format);
+
+
+	/// Miscs
+
+	double GetSystemTime();
 }

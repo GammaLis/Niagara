@@ -1,5 +1,6 @@
 #include "Utilities.h"
 #include <fstream>
+#include <chrono>
 
 namespace Niagara
 {
@@ -195,6 +196,13 @@ namespace Niagara
 	}
 
 
-	///
+	/// Miscs
+
+	double GetSystemTime()
+	{
+		auto now(std::chrono::system_clock::now());
+		auto duration = now.time_since_epoch();
+		return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count() / 1000.0;
+	}
 	
 }
