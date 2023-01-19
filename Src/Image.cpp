@@ -32,7 +32,7 @@ namespace Niagara
 		this->image = &image;
 	}
 
-	void ImageView::Destory(const Device &device)
+	void ImageView::Destroy(const Device &device)
 	{
 		if (view != VK_NULL_HANDLE)
 			vkDestroyImageView(device, view, nullptr);
@@ -87,7 +87,7 @@ namespace Niagara
 		this->type = GetImageType(extent);
 		this->format = format;
 		this->sampleCount = sampleCount;
-		this->usage = usage;
+		this->usage = imageUsage;
 		this->arrayLayers = arrayLayers;
 		this->tiling = tiling;
 
@@ -104,7 +104,7 @@ namespace Niagara
 		createInfo.arrayLayers = arrayLayers;
 		createInfo.samples = sampleCount;
 		createInfo.tiling = tiling;
-		createInfo.usage = usage;
+		createInfo.usage = imageUsage;
 
 		if (queueFamilies != nullptr)
 		{
@@ -127,6 +127,7 @@ namespace Niagara
 		allocInfo.allocationSize = memRequirements.size;
 		VkBool32 memTypeFound = VK_FALSE;
 		allocInfo.memoryTypeIndex = device.GetMemoryType(memRequirements.memoryTypeBits, memPropertyFlags, &memTypeFound);
+		assert(memTypeFound);
 
 		VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));
 		assert(memory);
@@ -143,6 +144,22 @@ namespace Niagara
 		}
 		if (image != VK_NULL_HANDLE)
 			vkDestroyImage(device, image, nullptr);
+
+		if (!views.empty())
+		{
+			for (auto &view : views)
+				view.Destroy(device);
+		}
+	}
+
+	const ImageView& Image::CreateImageView(const Device &device, VkImageViewType viewType, uint32_t baseMipLevel, uint32_t baseArrayLayer, uint32_t mipLevels, uint32_t arrayLayers)
+	{
+		views.push_back({});
+
+		auto &view = views.back();
+		view.Init(device, *this, viewType, baseMipLevel, baseArrayLayer, mipLevels > 0 ? mipLevels : subresource.mipLevel, arrayLayers > 0 ? arrayLayers : subresource.arrayLayer);
+
+		return view;
 	}
 
 	uint8_t* Image::Map(const Device &device)

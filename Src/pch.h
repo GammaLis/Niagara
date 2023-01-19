@@ -4,6 +4,7 @@
 #include <vector>
 #include <array>
 #include <set>
+#include <memory>
 #include <cassert>
 #include <system_error>
 #include <cstdint>

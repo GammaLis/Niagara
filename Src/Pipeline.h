@@ -165,11 +165,19 @@ namespace Niagara
 		std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
 		VkDescriptorUpdateTemplate descriptorUpdateTemplate = VK_NULL_HANDLE;
 
+		// Push constants
+		bool bUsePushConstants = false;
+		std::vector<VkPushConstantRange> pushConstantRanges;
+
 		// TODO: Delete this
 		DescriptorSetInfo descriptorSetInfos[s_MaxDescrptorSetNum];
 
+		// key: set << 6 | binding
 		std::unordered_map<uint8_t, ShaderResource> shaderResourceMap;
+		// key: set
 		std::unordered_map<uint8_t, std::vector<ShaderResource>> setResources;
+
+		std::unordered_map<std::string, ShaderResource> pushConstants;
 
 		void UpdateDescriptorSetInfo(DescriptorSetInfo &setInfo, uint32_t set = 0) const;
 
@@ -187,6 +195,7 @@ namespace Niagara
 		VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported = true) const;
 		std::vector<VkDescriptorSetLayout> CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported = true) const;
 		VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setIndex = 0, bool pushDescriptorsSupported = true) const;
+		std::vector<VkPushConstantRange> CreatePushConstantRanges() const;
 		VkPipelineLayout CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported = true) const;
 	};
 

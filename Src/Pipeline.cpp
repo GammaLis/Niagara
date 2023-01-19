@@ -54,13 +54,26 @@ namespace Niagara
 				if (shaderResource.type == ShaderResourceType::Input || 
 					shaderResource.type == ShaderResourceType::InputAttachment || 
 					shaderResource.type == ShaderResourceType::Output ||
-					shaderResource.type == ShaderResourceType::PushConstant || // No binding point
-					shaderResource.type == ShaderResourceType::SpecializationConstant) // No binding point
+					shaderResource.type == ShaderResourceType::SpecializationConstant) // No binding point, not used yet
 					continue;
+
+				// Push constants
+				if (shaderResource.type == ShaderResourceType::PushConstant) // No binding point
+				{
+					auto it = pushConstants.find(shaderResource.name);
+
+					if (it != pushConstants.end())
+						it->second.stages |= shaderResource.stages;
+					else
+						pushConstants.emplace(shaderResource.name, shaderResource);
+
+					continue;
+				}
 
 				uint8_t key = (shaderResource.set << 6u) | shaderResource.binding;
 
 				auto it = shaderResourceMap.find(key);
+
 				if (it != shaderResourceMap.end())
 					it->second.stages |= shaderResource.stages;
 				else
@@ -79,6 +92,8 @@ namespace Niagara
 			else
 				setResources.emplace(shaderResource.set, std::vector<ShaderResource>{ shaderResource });			
 		}
+
+		bUsePushConstants = !pushConstants.empty();
 	}
 
 	std::vector<VkPipelineShaderStageCreateInfo> Pipeline::GetShaderStagesCreateInfo() const
@@ -213,14 +228,32 @@ namespace Niagara
 		return updateTemplate;
 	}
 
+	std::vector<VkPushConstantRange> Pipeline::CreatePushConstantRanges() const
+	{
+		std::vector<VkPushConstantRange> ranges;
+
+		VkPushConstantRange range{};
+		for (const auto &kvp : pushConstants)
+		{
+			const auto &pushConstant = kvp.second;
+			range.stageFlags = pushConstant.stages;
+			range.offset = pushConstant.offset;
+			range.size = pushConstant.size;
+
+			ranges.push_back(range);
+		}
+
+		return ranges;
+	}
+
 	VkPipelineLayout Pipeline::CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported) const
 	{
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
 		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutCreateInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
 		pipelineLayoutCreateInfo.pSetLayouts = descriptorSetLayouts.data();
-		pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
-		pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
+		pipelineLayoutCreateInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
+		pipelineLayoutCreateInfo.pPushConstantRanges = pushConstantRanges.data();
 
 		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 		VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
@@ -284,6 +317,9 @@ namespace Niagara
 		NewGatherDescriptors();
 
 		this->descriptorSetLayouts = CreateDescriptorSetLayouts(device, g_PushDescriptorsSupported);
+
+		if (bUsePushConstants)
+			this->pushConstantRanges = CreatePushConstantRanges();
 
 #else
 		GatherDescriptors();

@@ -1210,60 +1210,6 @@ size_t BuildOptMeshlets(Mesh &mesh)
 }
 
 
-uint32_t FindMemoryType(const VkPhysicalDeviceMemoryProperties &memProperties, uint32_t typeFilter, VkMemoryPropertyFlags properties)
-{
-	for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
-	{
-		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
-			return i;
-	}
-
-	throw std::runtime_error("Failed to find suitable memory type!");
-}
-
-void GetGpuBuffer(GpuBuffer& result, VkDevice device, const VkPhysicalDeviceMemoryProperties& memProperties, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags propertyFlags)
-{
-	VkBufferCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	createInfo.size = size;
-	createInfo.usage = usage;
-	createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Optional
-
-	VkBuffer buffer;
-	VK_CHECK(vkCreateBuffer(device, &createInfo, nullptr, &buffer));
-
-	// The buffer has been created, but it doesn't actually have any memory assigned to it yet. The first step of allocating
-	// memory for the buffer is to query its memory requirements.
-	VkMemoryRequirements memoryRequirements;
-	vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
-
-	VkMemoryAllocateInfo allocInfo{};
-	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocInfo.allocationSize = memoryRequirements.size;
-	allocInfo.memoryTypeIndex = FindMemoryType(memProperties, memoryRequirements.memoryTypeBits,
-		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-	VkDeviceMemory memory;
-	VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &memory));
-
-	VK_CHECK(vkBindBufferMemory(device, buffer, memory, 0));
-
-	void* data = nullptr;
-	vkMapMemory(device, memory, 0, size, 0, &data);
-
-	result.buffer = buffer;
-	result.memory = memory;
-	result.data = data;
-	result.size = size;
-}
-
-void DestroyBuffer(VkDevice device, const GpuBuffer &buffer)
-{
-	vkFreeMemory(device, buffer.memory, nullptr);
-	vkDestroyBuffer(device, buffer.buffer, nullptr);
-}
-
-
 int main()
 {
 	std::cout << "Hello, Vulkan!" << std::endl;
@@ -1353,6 +1299,20 @@ int main()
 	// Retrieving queue handles
 	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
 	assert(graphicsQueue);
+
+#if 0
+	// Depth texture
+	Niagara::Image depthStencilTexture{};
+	depthStencilTexture.Init(
+		device, 
+		VkExtent3D{ swapchain.extent.width, swapchain.extent.height, 1 },
+		device.GetSupportedDepthFormat(true), 
+		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
+		0);
+	const auto &depthStencilView = depthStencilTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+
+	std::vector<VkFormat> attachmentFormats = { swapchain.colorFormat, depthStencilTexture.format };
+#endif
 
 	// Need swap chain surface format
 	VkRenderPass renderPass = GetRenderPass(device, swapchain.colorFormat);

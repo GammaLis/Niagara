@@ -57,6 +57,8 @@ namespace Niagara
 			uint32_t transfer;
 		} queueFamilyIndices;
 
+		Device() = default;
+
 		Device(const Device&) = delete;
 		Device(Device&&) = delete;
 

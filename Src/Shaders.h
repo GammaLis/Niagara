@@ -126,6 +126,8 @@ namespace Niagara
 		static VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, const std::vector<const Shader*>& shaders, bool pushDescriptorsSupported = true);
 		static VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, VkDescriptorSetLayout setLayout, const std::vector<const Shader*> &shaders, bool pushDescriptorsSupported = true);
 
+		Shader() = default;
+
 		bool IsValid() const { return module != VK_NULL_HANDLE; }
 
 		bool Load(VkDevice device, const std::string &fileName)

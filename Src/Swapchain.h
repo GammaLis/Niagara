@@ -48,6 +48,14 @@ namespace Niagara
 		std::vector<VkImageView> imageViews;
 		uint32_t queueNodeIndex = UINT32_MAX;
 
+		Swapchain() = default;
+
+		Swapchain(const Swapchain&) = delete;
+		Swapchain(Swapchain&&) = delete;
+
+		Swapchain& operator= (const Swapchain&) = delete;
+		Swapchain& operator= (Swapchain&&) = delete;
+
 		void Init(VkInstance instance, const Device& device, GLFWwindow* window);
 		void Destroy(const Device& device);
 
