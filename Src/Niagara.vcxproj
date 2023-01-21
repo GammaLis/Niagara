@@ -193,10 +193,12 @@
     <ClCompile Include="Image.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Pipeline.cpp" />
+    <ClCompile Include="RenderPass.cpp" />
     <ClCompile Include="Shaders.cpp" />
     <ClCompile Include="SpirvReflection.cpp" />
     <ClCompile Include="Swapchain.cpp" />
     <ClCompile Include="Utilities.cpp" />
+    <ClCompile Include="VkCommon.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h" />
@@ -218,10 +220,12 @@
     <ClInclude Include="Image.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Pipeline.h" />
+    <ClInclude Include="RenderPass.h" />
     <ClInclude Include="Shaders.h" />
     <ClInclude Include="SpirvReflection.h" />
     <ClInclude Include="Swapchain.h" />
     <ClInclude Include="Utilities.h" />
+    <ClInclude Include="VkCommon.h" />
     <ClInclude Include="VkInitializers.h" />
     <CustomBuild Include="..\Shaders\SimpleMesh.task.glsl">
       <FileType>Document</FileType>

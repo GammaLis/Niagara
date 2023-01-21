@@ -1,6 +1,6 @@
 #include "Image.h"
 #include "Device.h"
-#include "Utilities.h"
+#include "VkCommon.h"
 #include <iostream>
 
 
@@ -10,6 +10,8 @@ namespace Niagara
 
 	void ImageView::Init(const Device &device, Image& image, VkImageViewType viewType, uint32_t baseMipLevel, uint32_t baseArrayLayer, uint32_t mipLevels, uint32_t arrayLayers)
 	{
+		Destroy(device);
+
 		if (IsDepthStencilFormat(image.format))
 			subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 		else 
@@ -84,6 +86,8 @@ namespace Niagara
 		VkSampleCountFlagBits sampleCount, VkImageTiling tiling,
 		const uint32_t* queueFamilies, uint32_t queueFamilyCount)
 	{
+		Destroy(device);
+
 		this->type = GetImageType(extent);
 		this->format = format;
 		this->sampleCount = sampleCount;
@@ -139,7 +143,7 @@ namespace Niagara
 	{
 		if (memory != VK_NULL_HANDLE)
 		{
-			Unmap(device);
+			// Unmap(device);
 			vkFreeMemory(device, memory, nullptr);
 		}
 		if (image != VK_NULL_HANDLE)
@@ -149,6 +153,8 @@ namespace Niagara
 		{
 			for (auto &view : views)
 				view.Destroy(device);
+
+			views.clear();
 		}
 	}
 

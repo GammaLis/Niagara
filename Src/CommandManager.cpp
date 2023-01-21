@@ -35,7 +35,8 @@ namespace Niagara
 		vkFreeCommandBuffers(*g_Device, g_CommandMgr.commandPool, 1, &cmd);
 	}
 
-	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags)
+	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags,
+		VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask)
 	{
 		auto cmd = BeginSingleTimeCommands();
 
@@ -58,7 +59,7 @@ namespace Niagara
 		barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
 		barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
 
-		vkCmdPipelineBarrier(cmd, 0, 0, 0,
+		vkCmdPipelineBarrier(cmd, srcMask, dstMask, 0,
 			0, nullptr,
 			0, nullptr,
 			1, &barrier);

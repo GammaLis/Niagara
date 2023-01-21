@@ -1,5 +1,6 @@
 #include "Pipeline.h"
 #include "Device.h"
+#include "RenderPass.h"
 
 namespace Niagara
 {
@@ -312,6 +313,7 @@ namespace Niagara
 	void Pipeline::Init(VkDevice device)
 	{
 		assert(ShadersValid());
+		assert(renderPass);
 
 #if USE_SPIRV_CROSS
 		NewGatherDescriptors();
@@ -353,11 +355,6 @@ namespace Niagara
 			vkDestroyPipelineLayout(device, layout, nullptr);
 			layout = VK_NULL_HANDLE;
 		}
-		if (renderPass)
-		{
-			vkDestroyRenderPass(device, renderPass, nullptr);
-			renderPass = VK_NULL_HANDLE;
-		}
 		if (pipeline)
 		{
 			vkDestroyPipeline(device, pipeline, nullptr);
@@ -393,7 +390,7 @@ namespace Niagara
 		createInfo.pColorBlendState = &pipelineState.colorBlendState; // <--
 		createInfo.pDynamicState = &pipelineState.dynamicState; // <--
 		createInfo.layout = layout;
-		createInfo.renderPass = renderPass; // <--
+		createInfo.renderPass = renderPass->renderPass; // <--
 		createInfo.subpass = subpass; // <--
 		createInfo.basePipelineHandle = VK_NULL_HANDLE;
 		createInfo.basePipelineIndex = -1;

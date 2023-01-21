@@ -122,6 +122,7 @@ namespace Niagara
 	struct GraphicsPipelineState
 	{
 		GraphicsPipelineState() = default;
+
 		void Update();
 
 		VertexInputState vertexInputState;
@@ -145,6 +146,7 @@ namespace Niagara
 
 
 	class Device;
+	class RenderPass;
 
 	class Pipeline
 	{
@@ -158,7 +160,7 @@ namespace Niagara
 		VkPipeline pipeline = VK_NULL_HANDLE;
 		VkPipelineLayout layout = VK_NULL_HANDLE;
 
-		VkRenderPass renderPass = VK_NULL_HANDLE;
+		const RenderPass* renderPass{ nullptr };
 		uint32_t subpass = 0;
 
 		// Descriptors

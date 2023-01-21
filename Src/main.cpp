@@ -6,6 +6,7 @@
 #include "Device.h"
 #include "Swapchain.h"
 #include "Shaders.h"
+#include "RenderPass.h"
 #include "Pipeline.h"
 #include "CommandManager.h"
 #include "Image.h"
@@ -39,7 +40,7 @@
 
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
-#define USE_MESHLETS 1
+#define USE_MESHLETS 0
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
 // Mesh shader needs the 8bit_16bit_extension
@@ -55,11 +56,11 @@ constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
 
 const std::string g_ResourcePath = "../Resources/";
 
-bool g_FramebufferResized = false;
 GLFWwindow* g_Window = nullptr;
+bool g_FramebufferResized = false;
 
 // Window
-static void FramebufferResizeCallback(GLFWwindow * window, int width, int height)
+static void FramebufferResizeCallback(GLFWwindow *window, int width, int height)
 {
 	g_FramebufferResized = true;
 }
@@ -307,8 +308,10 @@ struct GpuBuffer
 
 	void Destory(const Niagara::Device &device)
 	{
-		vkFreeMemory(device, memory, nullptr);
-		vkDestroyBuffer(device, buffer, nullptr);
+		if (memory != VK_NULL_HANDLE)
+			vkFreeMemory(device, memory, nullptr);
+		if (buffer != VK_NULL_HANDLE)
+			vkDestroyBuffer(device, buffer, nullptr);
 	}
 };
 
@@ -322,17 +325,22 @@ struct BufferManager
 	GpuBuffer meshletDataBuffer;
 #endif
 
+	Niagara::Image DepthTexture;
+
 	void Cleanup(const Niagara::Device &device)
 	{
-		if (vertexBuffer.buffer != VK_NULL_HANDLE) vertexBuffer.Destory(device);
-		if (indexBuffer.buffer != VK_NULL_HANDLE) indexBuffer.Destory(device);
+		vertexBuffer.Destory(device);
+		indexBuffer.Destory(device);
 
 #if USE_MESHLETS
-		if (meshletBuffer.buffer != VK_NULL_HANDLE) meshletBuffer.Destory(device);
-		if (meshletDataBuffer.buffer != VK_NULL_HANDLE) meshletDataBuffer.Destory(device);
+		meshletBuffer.Destory(device);
+		meshletDataBuffer.Destory(device);
 #endif
+
+		DepthTexture.Destroy(device);
 	}
 };
+BufferManager g_BufferMgr{};
 
 
 /**
@@ -627,6 +635,7 @@ VkRenderPass GetRenderPass(VkDevice device, VkFormat format)
 	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
 	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
@@ -657,7 +666,7 @@ VkRenderPass GetRenderPass(VkDevice device, VkFormat format)
 	return renderPass;
 }
 
-void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, VkRenderPass renderPass, uint32_t subpass, const VkRect2D& viewportRect)
+void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, Niagara::RenderPass &renderPass, uint32_t subpass, const VkRect2D& viewportRect)
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
 
@@ -699,6 +708,15 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, V
 	rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 #endif
 
+	// Depth stencil state
+	if (renderPass.depthAttachment.format != VK_FORMAT_UNDEFINED)
+	{
+		auto& depthStencilState = pipelineState.depthStencilState;
+		depthStencilState.depthTestEnable = VK_TRUE;
+		depthStencilState.depthWriteEnable = VK_TRUE;
+		depthStencilState.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+	}
+
 	// Color blend state
 	// ...
 
@@ -706,7 +724,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, V
 	// ...
 
 	// Render pass
-	pipeline.renderPass = renderPass;
+	pipeline.renderPass = &renderPass;
 	pipeline.subpass = subpass;
 
 	pipeline.Init(device);
@@ -714,42 +732,49 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, V
 
 #pragma endregion
 
-void GetFramebuffers(VkDevice device, std::vector<VkFramebuffer> &framebuffers, const std::vector<VkImageView> &swapChainImageViews, const VkExtent2D &size, VkRenderPass renderPass)
+VkFramebuffer GetFramebuffer(VkDevice device, const std::vector<VkImageView> &attachments, const VkExtent2D &size, VkRenderPass renderPass)
 {
-	framebuffers.resize(swapChainImageViews.size());
-
 	VkFramebufferCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	createInfo.renderPass = renderPass;
-	createInfo.attachmentCount = 1;
+	createInfo.pAttachments = attachments.data();
+	createInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
 	createInfo.width = size.width;
 	createInfo.height = size.height;
 	createInfo.layers = 1;
-	
-	for (size_t i = 0; i < swapChainImageViews.size(); ++i)
-	{
-		VkImageView attachments[] =
-		{
-			swapChainImageViews[i]
-		};
 
-		createInfo.pAttachments = attachments;
+	VkFramebuffer framebuffer;
+	VK_CHECK(vkCreateFramebuffer(device, &createInfo, nullptr, &framebuffer));
 
-		VK_CHECK(vkCreateFramebuffer(device, &createInfo, nullptr, &framebuffers[i]));
-	}
+	return framebuffer;
 }
 
 void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipeline,
-	const std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, uint32_t imageIndex, const Mesh &mesh, const VkRect2D &viewportRect)
+	const std::vector<VkFramebuffer> &framebuffers, uint32_t imageIndex, const Mesh &mesh, const VkRect2D &viewportRect)
 {
+	const auto &renderPass = pipeline.renderPass;
+
+	// Clear values
+
 	VkClearValue clearColor;
 	clearColor.color = { 0.2f, 0.2f, 0.6f, 1.0f };
 
-	const auto& vb = bufferMgr.vertexBuffer;
-	const auto& ib = bufferMgr.indexBuffer;
+	std::vector<VkClearValue> clearValues(renderPass->GetAttachmentCount());
+	if (renderPass->activeColorAttachmentCount > 0)
+	{
+		for (uint32_t i = 0; i < renderPass->activeColorAttachmentCount; ++i)
+		{
+			if (renderPass->colorLoadStoreInfos[i].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR)
+				clearValues[i] = clearColor;
+		}
+	}
+	if (renderPass->depthAttachment.format != VK_FORMAT_UNDEFINED)
+	{
+		clearValues[renderPass->activeColorAttachmentCount].depthStencil = { 0.0f, 0 };
+	}
 
 	g_CommandContext.BeginCommandBuffer(cmd);
-	g_CommandContext.BeginRenderPass(cmd, pipeline.renderPass, framebuffers[imageIndex], viewportRect, { clearColor });
+	g_CommandContext.BeginRenderPass(cmd, pipeline.renderPass->renderPass, framebuffers[imageIndex], viewportRect, clearValues);
 
 	g_CommandContext.BindPipeline(cmd, pipeline);
 
@@ -758,13 +783,18 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 	vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
 	vkCmdSetScissor(cmd, 0, 1, &viewportRect);
 
+	// Descriptors
+
+	const auto& vb = g_BufferMgr.vertexBuffer;
+	const auto& ib = g_BufferMgr.indexBuffer;
+
 #if VERTEX_INPUT_MODE == 1
 	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size));
 	g_CommandContext.SetDescriptor(vbInfo, 0);
 
 #if USE_MESHLETS
-	const auto& mb = bufferMgr.meshletBuffer;
-	const auto& meshletDataBuffer = bufferMgr.meshletDataBuffer;
+	const auto& mb = g_BufferMgr.meshletBuffer;
+	const auto& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
 
 	auto mbInfo = Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size));
 	g_CommandContext.SetDescriptor(mbInfo, 1);
@@ -897,11 +927,11 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 
 void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex,
 	VkCommandBuffer cmd, Niagara::GraphicsPipeline &pipeline, VkQueue graphicsQueue,
-	std::vector<VkFramebuffer> &framebuffers, const BufferManager &bufferMgr, const Mesh &mesh, const VkRect2D &viewportRect)
+	std::vector<VkFramebuffer> &framebuffers, const Mesh &mesh, const VkRect2D &viewportRect)
 {
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
- 	RecordCommandBuffer(cmd, pipeline, framebuffers, bufferMgr, imageIndex, mesh, viewportRect);
+ 	RecordCommandBuffer(cmd, pipeline, framebuffers, imageIndex, mesh, viewportRect);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -1294,36 +1324,58 @@ int main()
 	Niagara::Swapchain swapchain{};
 	swapchain.Init(instance, device, window);
 
+	auto renderExtent = swapchain.extent;
+
 	g_CommandMgr.Init(device);
 
 	// Retrieving queue handles
 	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
 	assert(graphicsQueue);
 
-#if 0
 	// Depth texture
-	Niagara::Image depthStencilTexture{};
-	depthStencilTexture.Init(
+	VkFormat depthFormat = device.GetSupportedDepthFormat(true);
+	Niagara::Image& depthTexture = g_BufferMgr.DepthTexture;
+	depthTexture.Init(
 		device, 
-		VkExtent3D{ swapchain.extent.width, swapchain.extent.height, 1 },
-		device.GetSupportedDepthFormat(true), 
+		VkExtent3D{ renderExtent.width, renderExtent.height, 1 },
+		depthFormat, 
 		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
 		0);
-	const auto &depthStencilView = depthStencilTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+	auto depthView = depthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
 
-	std::vector<VkFormat> attachmentFormats = { swapchain.colorFormat, depthStencilTexture.format };
+#if 1
+	Niagara::RenderPass meshDrawPass{};
+	std::vector<Niagara::Attachment> colorAttachments{ Niagara::Attachment{swapchain.colorFormat} };
+	std::vector<Niagara::LoadStoreInfo> colorLoadStoreInfos{ Niagara::LoadStoreInfo{} };
+	Niagara::Attachment depthAttachment{ depthFormat };
+	Niagara::LoadStoreInfo depthLoadStoreInfo{};
+	meshDrawPass.SetAttachments(
+		colorAttachments.data(), static_cast<uint32_t>(colorAttachments.size()), colorLoadStoreInfos.data(),
+		&depthAttachment, &depthLoadStoreInfo);
+	meshDrawPass.Init(device);
+
+	VkRenderPass renderPass = meshDrawPass.renderPass;
+
+#else
+	VkRenderPass renderPass = GetRenderPass(device, swapchain.colorFormat);
 #endif
 
-	// Need swap chain surface format
-	VkRenderPass renderPass = GetRenderPass(device, swapchain.colorFormat);
 	assert(renderPass);
 
-	std::vector<VkFramebuffer> framebuffers;
-	GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
+	// Framebuffer
+	std::vector<VkFramebuffer> framebuffers(swapchain.imageCount);
+	// Frame attachments
+	std::vector<std::vector<VkImageView>> frameAttachments(swapchain.imageCount);
+	for (uint32_t i = 0; i < swapchain.imageCount; ++i)
+	{
+		frameAttachments[i] = { swapchain.imageViews[i], depthView.view };
+
+		framebuffers[i] = GetFramebuffer(device, frameAttachments[i], renderExtent, renderPass);
+	}
 	
 	// Pipeline
 	Niagara::GraphicsPipeline pipeline;
-	GetMeshDrawPipeline(device, pipeline, renderPass, 0, { {0, 0}, swapchain.extent });
+	GetMeshDrawPipeline(device, pipeline, meshDrawPass, 0, { {0, 0}, renderExtent });
 
 	// Command buffers
 
@@ -1360,8 +1412,7 @@ int main()
 	VkMemoryPropertyFlags hostVisibleMemPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 	VkMemoryPropertyFlags deviceLocalMemPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-	BufferManager bufferMgr{};
-	GpuBuffer &vb = bufferMgr.vertexBuffer, &ib = bufferMgr.indexBuffer;
+	GpuBuffer &vb = g_BufferMgr.vertexBuffer, &ib = g_BufferMgr.indexBuffer;
 	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
 
 	vb.Init(device, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
@@ -1371,17 +1422,61 @@ int main()
 		ib.Init(device, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
 	}
 #if USE_MESHLETS
-	GpuBuffer& meshletBuffer = bufferMgr.meshletBuffer;
+	GpuBuffer& meshletBuffer = g_BufferMgr.meshletBuffer;
 	size_t mbSize = mesh.meshlets.size() * sizeof(Meshlet);
 	meshletBuffer.Init(device, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
 
-	GpuBuffer& meshletDataBuffer = bufferMgr.meshletDataBuffer;
+	GpuBuffer& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
 	size_t meshletDataSize = mesh.meshletData.size() * 4;
 	meshletDataBuffer.Init(device, meshletDataSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshletData.data());
 #endif
 
 	uint32_t currentFrame = 0;
 	double currentFrameTime = glfwGetTime() * 1000.0;
+
+	// Resize
+	auto windowResize = [&](SyncObjects &currentSyncObjects) 
+	{
+		vkDeviceWaitIdle(device);
+
+		// Recreate swapchain
+		swapchain.UpdateSwapchain(device, window, false);
+
+		renderExtent = swapchain.extent;
+
+		// recreate images
+		g_BufferMgr.DepthTexture.Init(
+			device,
+			{ renderExtent.width, renderExtent.height,1 },
+			depthFormat,
+			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
+			0);
+		depthView = g_BufferMgr.DepthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+
+		// Recreate framebuffers
+		{
+			for (auto& framebuffer : framebuffers)
+				vkDestroyFramebuffer(device, framebuffer, nullptr);
+			
+			framebuffers.resize(swapchain.imageCount);
+			for (uint32_t i = 0; i < swapchain.imageCount; ++i)
+			{
+				std::vector<VkImageView> attachments{ swapchain.imageViews[i], depthView.view };
+				framebuffers[i] = GetFramebuffer(device, attachments, renderExtent, renderPass);
+				assert(framebuffers[i]);
+			}
+		}
+
+		// Recreate semaphores
+		{
+			vkDestroySemaphore(device, currentSyncObjects.imageAvailableSemaphore, nullptr);
+
+			currentSyncObjects.imageAvailableSemaphore = GetSemaphore(device);
+			assert(currentSyncObjects.imageAvailableSemaphore);
+		}
+
+		g_FramebufferResized = false;
+	};
 
 	// SPACE
 
@@ -1419,44 +1514,43 @@ int main()
 		VkResult result = swapchain.AcquireNextImage(device, currentSyncObjects.imageAvailableSemaphore, &imageIndex);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || g_FramebufferResized)
 		{
-			vkDeviceWaitIdle(device);
-
-			// Recreate swapchain
-			swapchain.UpdateSwapchain(device, window, false);
-
-			// Recreate framebuffers
-			for (auto &framebuffer : framebuffers)
-				vkDestroyFramebuffer(device, framebuffer, nullptr);
-			GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
-
-			// Recreate semaphores
-			vkDestroySemaphore(device, currentSyncObjects.imageAvailableSemaphore, nullptr);
-			currentSyncObjects.imageAvailableSemaphore = GetSemaphore(device);
-			assert(currentSyncObjects.imageAvailableSemaphore);
-
-			g_FramebufferResized = false;
+			windowResize(currentSyncObjects);
 			continue;
 		}
 
 		// Only reset the fence if we are submitting work
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
+		{
+			auto cmd = Niagara::BeginSingleTimeCommands();
+
+			g_CommandContext.ImageBarrier(swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+			g_CommandContext.ImageBarrier(depthTexture.image, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+			g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+
+			Niagara::EndSingleTimeCommands(cmd);
+		}
+
+
 		Render(device, currentSyncObjects, imageIndex, currentCommandBuffer, 
-			pipeline, graphicsQueue, framebuffers, bufferMgr, mesh, { {0, 0}, swapchain.extent});
+			pipeline, graphicsQueue, framebuffers, mesh, { {0, 0}, swapchain.extent});
+
+		{
+			auto cmd = Niagara::BeginSingleTimeCommands();
+
+			g_CommandContext.ImageBarrier(swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+			g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+
+			Niagara::EndSingleTimeCommands(cmd);
+		}
 
 		// Present
 		result = swapchain.QueuePresent(graphicsQueue, imageIndex, currentSyncObjects.renderFinishedSemaphore);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || g_FramebufferResized)
 		{
-			vkDeviceWaitIdle(device);
-
-			swapchain.UpdateSwapchain(device, window, false);
-
-			for (auto& framebuffer : framebuffers)
-				vkDestroyFramebuffer(device, framebuffer, nullptr);
-			GetFramebuffers(device, framebuffers, swapchain.imageViews, swapchain.extent, renderPass);
-
-			g_FramebufferResized = false;
+			windowResize(currentSyncObjects);
 			continue;
 		}
 
@@ -1486,21 +1580,21 @@ int main()
 	vkDestroyQueryPool(device, queryPool, nullptr);
 
 	for (auto &frameResource : frameResources)
-	{
 		frameResource.Cleanup(device);
-	}
 	
 	syncObjects.Cleanup(device);
 
 	for (auto &framebuffer : framebuffers)
 		vkDestroyFramebuffer(device, framebuffer, nullptr);
 	
-	bufferMgr.Cleanup(device);
+	g_BufferMgr.Cleanup(device);
 
 	g_CommandMgr.Cleanup(device);
 
 	// Pipeline
 	pipeline.Destroy(device);
+
+	meshDrawPass.Destroy(device);
 
 	swapchain.Destroy(device);
 
@@ -1508,6 +1602,7 @@ int main()
 	
 	if (g_bEnableValidationLayers)
 		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+
 	vkDestroyInstance(instance, nullptr);
 
 	return 0;
