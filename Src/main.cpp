@@ -42,6 +42,7 @@
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
 #define USE_MESHLETS 1
+#define USE_MULTI_DRAW_INDIRECT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
 // Mesh shader needs the 8bit_16bit_extension
@@ -201,7 +202,8 @@ enum DescriptorBindings : uint32_t
 {
 	VertexBuffer		= 0,
 	MeshletBuffer		= 1,
-	MeshletDataBuffer	= 2
+	MeshletDataBuffer	= 2,
+	MeshDrawBuffer		= 3
 };
 
 
@@ -295,7 +297,9 @@ struct Vertex
 */
 struct alignas(16) Meshlet
 {
-	glm::vec4 cone;
+	glm::vec4 boundingSphere; // xyz - center, w - radius
+	glm::vec4 coneApex; // w - unused
+	glm::vec4 cone; // xyz - cone direction, w - cosAngle
 	// uint32_t vertices[MESHLET_MAX_VERTICES];
 	// uint8_t indices[MESHLET_MAX_PRIMITIVES*3]; // up to MESHLET_MAX_PRIMITIVES triangles
 	uint32_t vertexOffset;
@@ -309,6 +313,19 @@ struct Mesh
 	std::vector<uint32_t> indices;
 	std::vector<uint32_t> meshletData;
 	std::vector<Meshlet> meshlets;
+};
+
+struct alignas(16) MeshDraw
+{
+	union
+	{
+		uint32_t commandData[7];
+		struct
+		{
+			VkDrawIndexedIndirectCommand drawIndexedIndirectCommand; // 5 uint32_t
+			VkDrawMeshTasksIndirectCommandNV drawMeshTaskIndirectCommand; // 2 uint32_t
+		};
+	};
 };
 
 struct GpuBuffer
@@ -333,8 +350,12 @@ struct GpuBuffer
 		Niagara::EndSingleTimeCommands(cmd);
 	}
 
-	void Init(const Niagara::Device &device, size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
+	void Init(const Niagara::Device &device, uint32_t stride, uint32_t elementCount, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryFlags, const void *pInitialData = nullptr)
 	{
+		this->elementCount = elementCount;
+		this->stride = stride;
+		size = elementCount * stride;
+
 		VkBufferCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		createInfo.size = size;
@@ -365,16 +386,16 @@ struct GpuBuffer
 			vkMapMemory(device, memory, 0, size, 0, &data);
 		}
 
-		this->size = size;
-
 		if (pInitialData != nullptr)
-			Update(device, pInitialData, size);
+			Update(device, pInitialData, stride, elementCount);
 	}
 
-	void Update(const Niagara::Device &device, const void *pData, size_t size)
+	void Update(const Niagara::Device &device, const void *pData, uint32_t stride, uint32_t elementCount)
 	{
 		if (buffer == VK_NULL_HANDLE || pData == nullptr) 
 			return;
+
+		uint32_t size = stride * elementCount;
 
 		if (data != nullptr)
 		{
@@ -383,7 +404,7 @@ struct GpuBuffer
 		else
 		{
 			GpuBuffer scratchBuffer{};
-			scratchBuffer.Init(device, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, pData);
+			scratchBuffer.Init(device, stride, elementCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, pData);
 
 			Copy(device, *this, scratchBuffer, size);
 
@@ -404,6 +425,7 @@ struct alignas(16) ViewUniformBufferParameters
 {
 	glm::mat4 viewProjMatrix;
 	glm::vec4 debugValue;
+	glm::vec3 camPos;
 };
 ViewUniformBufferParameters g_ViewUniformBufferParameters;
 
@@ -415,6 +437,7 @@ struct BufferManager
 	// Storage buffers
 	GpuBuffer vertexBuffer;
 	GpuBuffer indexBuffer;
+	GpuBuffer drawCommandBuffer;
 
 #if USE_MESHLETS
 	GpuBuffer meshletBuffer;
@@ -431,6 +454,7 @@ struct BufferManager
 		// Storage buffers
 		vertexBuffer.Destory(device);
 		indexBuffer.Destory(device);
+		drawCommandBuffer.Destory(device);
 
 #if USE_MESHLETS
 		meshletBuffer.Destory(device);
@@ -906,6 +930,15 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 
 	auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshletDataBuffer.size));
 	g_CommandContext.SetDescriptor(meshletDataInfo, DescriptorBindings::MeshletDataBuffer);
+
+	// Indirect draws
+#if USE_MULTI_DRAW_INDIRECT
+	const auto& drawBuffer = g_BufferMgr.drawCommandBuffer;
+
+	auto drawBufferInfo = Niagara::DescriptorInfo(drawBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawBuffer.size));
+	g_CommandContext.SetDescriptor(drawBufferInfo, DescriptorBindings::MeshDrawBuffer);
+#endif // USE_MULTI_DRAW_INDIRECT
+
 #endif
 
 #endif
@@ -920,19 +953,29 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 	vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
 
 #if USE_MESHLETS
-	uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
-	vkCmdDrawMeshTasksNV(cmd, Niagara::DivideAndRoundUp(nTask, 32), 0);
+	
+#if USE_MULTI_DRAW_INDIRECT
+	vkCmdDrawMeshTasksIndirectNV(cmd, drawBuffer.buffer, offsetof(MeshDraw, drawMeshTaskIndirectCommand), drawBuffer.elementCount, sizeof(MeshDraw));
 
 #else
-	uint32_t nVertex = static_cast<uint32_t>(vb.size / sizeof(Vertex));
-	uint32_t nIndex = static_cast<uint32_t>(ib.size / sizeof(uint32_t));
+	uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
+	vkCmdDrawMeshTasksNV(cmd, Niagara::DivideAndRoundUp(nTask, 32), 0);
+#endif
+
+#else
 	if (ib.size > 0)
 	{
+#if USE_MULTI_DRAW_INDIRECT
+		const auto& drawBuffer = g_BufferMgr.drawCommandBuffer;
+		vkCmdDrawIndexedIndirect(cmd, drawBuffer.buffer, offsetof(MeshDraw, drawIndexedIndirectCommand), drawBuffer.elementCount, sizeof(MeshDraw));
+
+#else
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
-		vkCmdDrawIndexed(cmd, nIndex, 1, 0, 0, 0);
+		vkCmdDrawIndexed(cmd, ib.elementCount, 1, 0, 0, 0);
+#endif
 	}
 	else
-		vkCmdDraw(cmd, nVertex, 1, 0, 0);
+		vkCmdDraw(cmd, vb.elementCount, 1, 0, 0);
 #endif
 
 	g_CommandContext.EndRenderPass(cmd);
@@ -1328,6 +1371,8 @@ size_t BuildOptMeshlets(Mesh &mesh)
 		meshlet.vertexCount = optMeshlets[i].vertex_count;
 		meshlet.triangleCount = optMeshlets[i].triangle_count;
 		meshlet.vertexOffset = meshletDataOffset;
+		meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
+		meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[0], 0);
 		meshlet.cone = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
 
 		// Vertex indices
@@ -1392,6 +1437,7 @@ int main()
 
 	// Device features
 	VkPhysicalDeviceFeatures physicalDeviceFeatures{};
+	physicalDeviceFeatures.multiDrawIndirect = true;
 
 	// Device extensions
 	void* pNextChain = nullptr;
@@ -1430,6 +1476,15 @@ int main()
 
 	*pNext = &featureMaintenance4;
 	pNext = &featureMaintenance4.pNext;
+#endif
+
+#if USE_MULTI_DRAW_INDIRECT
+	VkPhysicalDeviceShaderDrawParametersFeatures featureDrawParams{};
+	featureDrawParams.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+	featureDrawParams.shaderDrawParameters = VK_TRUE;
+
+	*pNext = &featureDrawParams;
+	pNext = &featureDrawParams.pNext;
 #endif
 
 	Niagara::Device device{};
@@ -1513,9 +1568,9 @@ int main()
 	glm::vec3 center{};
 	glm::vec3 up{ 0, 1, 0 };
 	auto& camera = Niagara::CameraManipulator::Singleton();
-	camera.SetCamera( { eye, center, up, glm::radians(90.0f) } );
 	camera.SetWindowSize(swapchain.extent.width, swapchain.extent.height);
 	camera.SetSpeed(0.02f);
+	camera.SetCamera( { eye, center, up, glm::radians(90.0f) } );
 	
 	// Buffers
 	VkMemoryPropertyFlags hostVisibleMemPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -1525,7 +1580,7 @@ int main()
 	g_ViewUniformBufferParameters.debugValue = glm::vec4(0.8, 0.2, 0.2, 1);
 
 	auto& viewUniformBuffer = g_BufferMgr.viewUniformBuffer;
-	viewUniformBuffer.Init(device, sizeof(ViewUniformBufferParameters), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
+	viewUniformBuffer.Init(device, sizeof(ViewUniformBufferParameters), 1, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
 
 	// Mesh
 	Mesh mesh{};
@@ -1547,22 +1602,41 @@ int main()
 #endif
 
 	GpuBuffer &vb = g_BufferMgr.vertexBuffer, &ib = g_BufferMgr.indexBuffer;
-	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
+	vb.Init(device, sizeof(Vertex), static_cast<uint32_t>(mesh.vertices.size()), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
 
-	vb.Init(device, vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
 	if (!mesh.indices.empty())
 	{
-		size_t ibSize = mesh.indices.size() * sizeof(uint32_t);
-		ib.Init(device, ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
+		ib.Init(device, sizeof(uint32_t), static_cast<uint32_t>(mesh.indices.size()), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
 	}
+
+	// Indirect draw command buffers
+#if USE_MULTI_DRAW_INDIRECT
+	// Preparing indirect draw commands
+	const uint32_t DrawCount = 100;
+	std::vector<MeshDraw> meshDraws(DrawCount);
+	for (uint32_t i = 0; i < DrawCount; ++i)
+	{
+		auto& draw = meshDraws[i];
+
+		memset(&draw.commandData, 0, sizeof(draw.commandData));
+		draw.drawIndexedIndirectCommand.indexCount = static_cast<uint32_t>(mesh.indices.size());
+		draw.drawIndexedIndirectCommand.instanceCount = 1;
+
+		uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
+		draw.drawMeshTaskIndirectCommand.taskCount = Niagara::DivideAndRoundUp(nTask, 32);
+	}
+	// Indirect draw command buffer
+	GpuBuffer& drawBuffer = g_BufferMgr.drawCommandBuffer;
+	drawBuffer.Init(device, sizeof(MeshDraw), static_cast<uint32_t>(meshDraws.size()), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+		deviceLocalMemPropertyFlags, meshDraws.data());
+#endif
+
 #if USE_MESHLETS
 	GpuBuffer& meshletBuffer = g_BufferMgr.meshletBuffer;
-	size_t mbSize = mesh.meshlets.size() * sizeof(Meshlet);
-	meshletBuffer.Init(device, mbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
+	meshletBuffer.Init(device, sizeof(Meshlet), static_cast<uint32_t>(mesh.meshlets.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
 
 	GpuBuffer& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
-	size_t meshletDataSize = mesh.meshletData.size() * 4;
-	meshletDataBuffer.Init(device, meshletDataSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshletData.data());
+	meshletDataBuffer.Init(device, 4, static_cast<uint32_t>(mesh.meshletData.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshletData.data());
 #endif
 
 	uint32_t currentFrame = 0;
@@ -1633,7 +1707,8 @@ int main()
 		camera.UpdateAnim();
 
 		g_ViewUniformBufferParameters.viewProjMatrix = camera.GetViewProjMatrix();
-		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters));
+		g_ViewUniformBufferParameters.camPos = camera.GetCamera().eye;
+		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters), 1);
 
 		// Get resources
 		SyncObjects &currentSyncObjects = frameResources[currentFrame].syncObjects;

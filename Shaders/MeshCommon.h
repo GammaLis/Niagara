@@ -37,10 +37,17 @@ struct Vertex
 
 struct Meshlet
 {
+	vec4 boundingSphere; // xyz - center, w - radius
+	vec4 coneApex;
 	vec4 cone;
-	uint32_t vertexOffset;
+	uint vertexOffset;
 	uint8_t vertexCount;
 	uint8_t triangleCount;
+};
+
+struct MeshDraw
+{
+	uint commandData[7];
 };
 
 

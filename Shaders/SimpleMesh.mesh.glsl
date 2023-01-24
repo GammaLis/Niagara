@@ -6,6 +6,8 @@
 #extension GL_NV_mesh_shader	: require
 // #define GL_EXT_mesh_shader 1
 
+#extension GL_ARB_shader_draw_parameters: require // gl_DrawIDARB
+
 #if 0
 #if USE_8BIT_16BIT_EXTENSIONS
 #extension GL_EXT_shader_16bit_storage  : require
@@ -32,6 +34,11 @@ layout (std430, binding = 1) buffer Meshlets
 layout (binding = 2) buffer MeshletData
 {
 	uint meshletData[];
+};
+
+layout(binding = 3) buffer Draws
+{
+	MeshDraw draws[];
 };
 
 in taskNV block
@@ -115,6 +122,8 @@ void main()
 {
 	const uint meshletIndex = meshletIndices[gl_WorkGroupID.x];
 	const uint localThreadId = gl_LocalInvocationID.x;
+
+	const MeshDraw meshDraw = draws[gl_DrawIDARB];
 
 	const uint vertexCount = uint(meshlets[meshletIndex].vertexCount);
 	const uint triangleCount = uint(meshlets[meshletIndex].triangleCount);
