@@ -10,6 +10,7 @@
 #include "Pipeline.h"
 #include "CommandManager.h"
 #include "Image.h"
+#include "Camera.h"
 #include "Utilities.h"
 
 #include <iostream>
@@ -40,7 +41,7 @@
 
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
-#define USE_MESHLETS 0
+#define USE_MESHLETS 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
 // Mesh shader needs the 8bit_16bit_extension
@@ -58,11 +59,88 @@ const std::string g_ResourcePath = "../Resources/";
 
 GLFWwindow* g_Window = nullptr;
 bool g_FramebufferResized = false;
+double g_DeltaTime = 0.0f;
 
-// Window
-static void FramebufferResizeCallback(GLFWwindow *window, int width, int height)
+// Window callbacks
+void FramebufferResizeCallback(GLFWwindow *window, int width, int height)
 {
 	g_FramebufferResized = true;
+}
+
+void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+	using Niagara::CameraManipulator;
+
+	const bool pressed = action != GLFW_RELEASE;
+
+	CameraManipulator::Inputs &inputs = Niagara::g_Inputs;
+	inputs.ctrl	 = mods & GLFW_MOD_CONTROL;
+	inputs.shift = mods & GLFW_MOD_SHIFT;
+	inputs.alt	 = mods & GLFW_MOD_ALT;
+
+	auto& cameraManip = CameraManipulator::Singleton();
+
+	float factor = static_cast<float>(g_DeltaTime);
+
+	// For all pressed keys - apply the action
+	// cameraManip.KeyMotion(0, 0, CameraManipulator::Actions::NoAction);
+	switch (key)
+	{
+	case GLFW_KEY_ESCAPE:
+		glfwSetWindowShouldClose(window, GLFW_TRUE);
+		break;
+	case GLFW_KEY_W:
+		cameraManip.KeyMotion(factor, 0, CameraManipulator::Actions::Dolly);
+		break;
+	case GLFW_KEY_S:
+		cameraManip.KeyMotion(-factor, 0, CameraManipulator::Actions::Dolly);
+		break;
+	case GLFW_KEY_A:
+	case GLFW_KEY_LEFT:
+		cameraManip.KeyMotion(-factor, 0, CameraManipulator::Actions::Pan);
+		break;
+	case GLFW_KEY_UP:
+		cameraManip.KeyMotion(0, factor, CameraManipulator::Actions::Pan);
+		break;
+	case GLFW_KEY_D:
+	case GLFW_KEY_RIGHT:
+		cameraManip.KeyMotion(factor, 0, CameraManipulator::Actions::Pan);
+		break;
+	case GLFW_KEY_DOWN:
+		cameraManip.KeyMotion(0, -factor, CameraManipulator::Actions::Pan);
+		break;
+	}
+}
+
+void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
+{
+	using Niagara::CameraManipulator;
+
+	double xpos, ypos;
+	glfwGetCursorPos(window, &xpos, &ypos);
+	CameraManipulator::Singleton().SetMousePosition(static_cast<int>(xpos), static_cast<int>(ypos));
+
+	CameraManipulator::Inputs& inputs = Niagara::g_Inputs;
+	inputs.lmb = (button == GLFW_MOUSE_BUTTON_LEFT) && (action == GLFW_PRESS);
+	inputs.mmb = (button == GLFW_MOUSE_BUTTON_MIDDLE) && (action == GLFW_PRESS);
+	inputs.rmb = (button == GLFW_MOUSE_BUTTON_RIGHT) && (action == GLFW_PRESS);
+}
+
+void WindowCloseCallback(GLFWwindow* window)
+{
+	glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
+void CursorPosCallback(GLFWwindow *window, double xpos, double ypos)
+{
+	using Niagara::CameraManipulator;
+
+	const auto& inputs = Niagara::g_Inputs;
+
+	if (inputs.lmb || inputs.mmb || inputs.rmb)
+	{
+		CameraManipulator::Singleton().MouseMove(static_cast<int>(xpos), static_cast<int>(ypos), inputs);
+	}
 }
 
 
@@ -117,6 +195,13 @@ std::vector<VkDynamicState> g_DynamicStates =
 {
 	VK_DYNAMIC_STATE_VIEWPORT,
 	VK_DYNAMIC_STATE_SCISSOR
+};
+
+enum DescriptorBindings : uint32_t
+{
+	VertexBuffer		= 0,
+	MeshletBuffer		= 1,
+	MeshletDataBuffer	= 2
 };
 
 
@@ -315,8 +400,19 @@ struct GpuBuffer
 	}
 };
 
+struct alignas(16) ViewUniformBufferParameters
+{
+	glm::mat4 viewProjMatrix;
+	glm::vec4 debugValue;
+};
+ViewUniformBufferParameters g_ViewUniformBufferParameters;
+
 struct BufferManager 
 {
+	// Uniform buffers
+	GpuBuffer viewUniformBuffer;
+
+	// Storage buffers
 	GpuBuffer vertexBuffer;
 	GpuBuffer indexBuffer;
 
@@ -329,6 +425,10 @@ struct BufferManager
 
 	void Cleanup(const Niagara::Device &device)
 	{
+		// Uniform buffers
+		viewUniformBuffer.Destory(device);
+
+		// Storage buffers
 		vertexBuffer.Destory(device);
 		indexBuffer.Destory(device);
 
@@ -785,27 +885,36 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 
 	// Descriptors
 
+	// Globals
+	auto viewUniformBufferParams = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
+	g_CommandContext.SetDescriptor(viewUniformBufferParams, 4, 0);
+
+	// Meshes
 	const auto& vb = g_BufferMgr.vertexBuffer;
 	const auto& ib = g_BufferMgr.indexBuffer;
 
 #if VERTEX_INPUT_MODE == 1
 	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size));
-	g_CommandContext.SetDescriptor(vbInfo, 0);
+	g_CommandContext.SetDescriptor(vbInfo, DescriptorBindings::VertexBuffer);
 
 #if USE_MESHLETS
 	const auto& mb = g_BufferMgr.meshletBuffer;
 	const auto& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
 
 	auto mbInfo = Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size));
-	g_CommandContext.SetDescriptor(mbInfo, 1);
+	g_CommandContext.SetDescriptor(mbInfo, DescriptorBindings::MeshletBuffer);
 
 	auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshletDataBuffer.size));
-	g_CommandContext.SetDescriptor(meshletDataInfo, 2);
+	g_CommandContext.SetDescriptor(meshletDataInfo, DescriptorBindings::MeshletDataBuffer);
 #endif
 
 #endif
 
-	g_CommandContext.PushDescriptorSetWithTemplate(cmd);
+#if 1
+	g_CommandContext.PushDescriptorSetWithTemplate(cmd, 0);
+#else
+	g_CommandContext.PushDescriptorSet(cmd, 0);
+#endif
 
 	VkDeviceSize offset = 0;
 	vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
@@ -1254,10 +1363,17 @@ int main()
 
 	// Because GLFW was originally designed to create an OpenGL context, we need to tell it to not create an OpenGL context
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+	auto* monitor = glfwGetPrimaryMonitor();
+	const auto* videoMode = glfwGetVideoMode(monitor);
 	GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Niagara", nullptr, nullptr);
 	g_Window = window;
+	// Inputs
 	glfwSetWindowUserPointer(window, nullptr);
 	glfwSetFramebufferSizeCallback(window, FramebufferResizeCallback);
+	glfwSetKeyCallback(window, KeyCallback);
+	glfwSetMouseButtonCallback(window, MouseButtonCallback);
+	glfwSetWindowCloseCallback(window, WindowCloseCallback);
+	glfwSetCursorPosCallback(window, CursorPosCallback);
 
 	// Vulkan
 	VK_CHECK(volkInitialize());
@@ -1390,6 +1506,27 @@ int main()
 	VkQueryPool queryPool = GetQueryPool(device, 128);
 	assert(queryPool);
 
+	// Scenes
+	
+	// Camera
+	glm::vec3 eye{ 0, 0, 10 };
+	glm::vec3 center{};
+	glm::vec3 up{ 0, 1, 0 };
+	auto& camera = Niagara::CameraManipulator::Singleton();
+	camera.SetCamera( { eye, center, up, glm::radians(90.0f) } );
+	camera.SetWindowSize(swapchain.extent.width, swapchain.extent.height);
+	camera.SetSpeed(0.02f);
+	
+	// Buffers
+	VkMemoryPropertyFlags hostVisibleMemPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	VkMemoryPropertyFlags deviceLocalMemPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+	
+	// Uniforms
+	g_ViewUniformBufferParameters.debugValue = glm::vec4(0.8, 0.2, 0.2, 1);
+
+	auto& viewUniformBuffer = g_BufferMgr.viewUniformBuffer;
+	viewUniformBuffer.Init(device, sizeof(ViewUniformBufferParameters), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
+
 	// Mesh
 	Mesh mesh{};
 	
@@ -1408,9 +1545,6 @@ int main()
 	auto meshletCount = BuildOptMeshlets(mesh);
 	assert(!mesh.meshlets.empty() && !mesh.meshletData.empty());
 #endif
-
-	VkMemoryPropertyFlags hostVisibleMemPropertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-	VkMemoryPropertyFlags deviceLocalMemPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
 	GpuBuffer &vb = g_BufferMgr.vertexBuffer, &ib = g_BufferMgr.indexBuffer;
 	size_t vbSize = mesh.vertices.size() * sizeof(Vertex);
@@ -1491,7 +1625,15 @@ int main()
 	 */
 	while (!glfwWindowShouldClose(window))
 	{
+		camera.KeyMotion(0, 0, Niagara::CameraManipulator::Actions::NoAction);
+		
 		glfwPollEvents();
+
+		// Update
+		camera.UpdateAnim();
+
+		g_ViewUniformBufferParameters.viewProjMatrix = camera.GetViewProjMatrix();
+		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters));
 
 		// Get resources
 		SyncObjects &currentSyncObjects = frameResources[currentFrame].syncObjects;
@@ -1559,6 +1701,8 @@ int main()
 		double frameEndTime = glfwGetTime() * 1000.0;
 		double deltaTime = frameEndTime - currentFrameTime;
 		currentFrameTime = frameEndTime;
+
+		g_DeltaTime = deltaTime;
 
 		char title[256];
 		sprintf_s(title, "Cpu %.1f ms, Gpu %.1f ms", deltaTime, 0.f);

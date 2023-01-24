@@ -108,7 +108,7 @@ namespace Niagara
 		using ConstantList = std::initializer_list<uint32_t>;
 
 		VkShaderModule module = VK_NULL_HANDLE;
-		VkShaderStageFlagBits stage;
+		VkShaderStageFlagBits stage{};
 
 		VkDescriptorType resourceTypes[32];
 		uint32_t resourceMask;

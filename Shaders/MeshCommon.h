@@ -10,9 +10,15 @@
 #extension GL_EXT_shader_explicit_arithmetic_types  : require
 #endif
 
+#include "Common.h"
+
 
 #define MAX_VERTICES 64
 #define MAX_PRIMITIVES 84
+
+#define DESC_VERTEX_BUFFER 0
+#define DESC_MESHLET_BUFFER 1
+#define DESC_MESHLET_DATA_BUFFER 2
 
 
 struct Vertex

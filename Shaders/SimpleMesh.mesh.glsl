@@ -130,11 +130,14 @@ void main()
 	{
 		uint vi = meshletData[vertexOffset + i];
 
-		vec3 position = vec3(vertices[vi].px, vertices[vi].py, vertices[vi].pz);
+		vec3 posOS = vec3(vertices[vi].px, vertices[vi].py, vertices[vi].pz);
+
+		// position.z = position.z * 0.5 + 0.5;
+		vec4 position = _View.viewProjMatrix * vec4(posOS, 1.0);
 		vec3 normal = vec3(uint(vertices[vi].nx), uint(vertices[vi].ny), uint(vertices[vi].nz)) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].s, vertices[vi].t);
 
-		gl_MeshVerticesNV[i].gl_Position = vec4(position, 1.0);
+		gl_MeshVerticesNV[i].gl_Position = position;
 	#if !DEBUG
 		OUT[i].outNormal = normal;
 	#else

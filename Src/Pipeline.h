@@ -190,7 +190,7 @@ namespace Niagara
 		virtual bool ShadersValid() const = 0;
 
 		void GatherDescriptors();
-		void NewGatherDescriptors();
+		void SpirvCrossGatherDescriptors();
 		std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo() const;
 		std::vector<VkDescriptorSetLayoutBinding> GetDescriptorBindings(uint32_t set = 0) const;
 		std::vector<VkDescriptorUpdateTemplateEntry> GetDescriptorUpdateTemplateEntries(uint32_t set = 0) const;

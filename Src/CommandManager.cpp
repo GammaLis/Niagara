@@ -132,6 +132,9 @@ namespace Niagara
 
 	void CommandContext::UpdateDescriptorSetInfo(const Pipeline& pipeline)
 	{
+		if (cachedPipelineLayout == pipeline.layout)
+			return;
+
 		for (uint32_t i = 0; i < Pipeline::s_MaxDescrptorSetNum; ++i)
 			pipeline.UpdateDescriptorSetInfo(descriptorSetInfos[i], i);
 
@@ -139,8 +142,7 @@ namespace Niagara
 
 		cachedDescriptorSetLayouts = pipeline.descriptorSetLayouts;
 
-		if (pipeline.descriptorUpdateTemplate)
-			cachedDescriptorUpdateTemplate = pipeline.descriptorUpdateTemplate;
+		cachedDescriptorUpdateTemplate = pipeline.descriptorUpdateTemplate;
 	}
 
 	void CommandContext::BeginCommandBuffer(VkCommandBuffer cmd, VkCommandBufferUsageFlags usage)
@@ -193,7 +195,7 @@ namespace Niagara
 		const auto& descriptorSetInfo = descriptorSetInfos[set];
 
 		if (descriptorSetInfo.count == 0)
-			return  descriptorInfos;
+			return descriptorInfos;
 
 		descriptorInfos.resize(descriptorSetInfo.count);
 		for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax; ++i)
@@ -205,17 +207,25 @@ namespace Niagara
 		return descriptorInfos;
 	}
 
-	std::vector<VkWriteDescriptorSet> CommandContext::GetDescriptorSets(uint32_t set) const
+	std::vector<VkWriteDescriptorSet> CommandContext::GetWriteDescriptorSets(uint32_t set) const
 	{
 		std::vector<VkWriteDescriptorSet> descriptorSets;
 
 		const auto& descriptorSetInfo = descriptorSetInfos[set];
 
+		VkWriteDescriptorSet descriptorSet{};
+		descriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		
 		for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax; ++i)
 		{
 			if (descriptorSetInfo.mask & (1 << i))
 			{
-				descriptorSets.push_back(cachedWriteDescriptorSets[set][i]);
+				descriptorSet.dstBinding = i;
+				descriptorSet.descriptorCount = 1;
+				descriptorSet.descriptorType = descriptorSetInfos[set].types[i];
+				descriptorSet.pBufferInfo = &(cachedDescriptorInfos[set][i].bufferInfo);
+
+				descriptorSets.push_back(descriptorSet);
 			}
 		}
 

@@ -105,9 +105,21 @@ namespace Niagara
 			cachedWriteDescriptorSets[set][binding] = descriptor;
 		}
 
+		void SetWriteDescriptor(const DescriptorInfo& info, uint32_t binding, uint32_t set = 0)
+		{
+			assert(descriptorSetInfos[set].mask & (1 << binding));
+
+			auto& descriptor = cachedWriteDescriptorSets[set][binding];
+			descriptor.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptor.dstBinding = binding;
+			descriptor.descriptorCount = 1;
+			descriptor.descriptorType = descriptorSetInfos[set].types[binding];
+			descriptor.pBufferInfo = &info.bufferInfo;
+		}
+
 		std::vector<DescriptorInfo> GetDescriptorInfos(uint32_t set = 0) const;
 
-		std::vector<VkWriteDescriptorSet> GetDescriptorSets(uint32_t set = 0) const;
+		std::vector<VkWriteDescriptorSet> GetWriteDescriptorSets(uint32_t set = 0) const;
 
 		void PushDescriptorSetWithTemplate(VkCommandBuffer cmd, uint32_t set = 0)
 		{
@@ -119,7 +131,7 @@ namespace Niagara
 
 		void PushDescriptorSet(VkCommandBuffer cmd, uint32_t set = 0)
 		{
-			auto writeDescriptorSets = GetDescriptorSets(set);
+			auto writeDescriptorSets = GetWriteDescriptorSets(set);
 			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipelineLayout, set, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
 		}
 

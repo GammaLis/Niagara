@@ -42,7 +42,7 @@ namespace Niagara
 			descriptorSetInfo.count = setEnd - descriptorSetInfo.start;
 	}
 
-	void Pipeline::NewGatherDescriptors()
+	void Pipeline::SpirvCrossGatherDescriptors()
 	{
 		// Collect and combine all the shader resources from each of the shader modules
 		auto shaders = GetPipelineShaders();
@@ -198,7 +198,11 @@ namespace Niagara
 			createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 			createInfo.pBindings = setLayoutBindings.data();
 			createInfo.bindingCount = static_cast<uint32_t>(setLayoutBindings.size());
-			createInfo.flags = pushDescriptorsSupported ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+			// ERROR::vkCreatePipelineLayout() Multiple push descriptor sets found. 
+			// The Vulkan spec states: pSetLayouts must not contain more than one descriptor set layout that was created with 
+			// VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR set 
+			// (https://vulkan.lunarg.com/doc/view/1.3.236.0/windows/1.3-extensions/vkspec.html#VUID-VkPipelineLayoutCreateInfo-pSetLayouts-00293)
+			createInfo.flags = pushDescriptorsSupported && kvp.first == 0 ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
 
 			VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 			VK_CHECK(vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &setLayout));
@@ -253,8 +257,12 @@ namespace Niagara
 		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutCreateInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
 		pipelineLayoutCreateInfo.pSetLayouts = descriptorSetLayouts.data();
-		pipelineLayoutCreateInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
-		pipelineLayoutCreateInfo.pPushConstantRanges = pushConstantRanges.data();
+		// Push constants
+		if (!pushConstantRanges.empty())
+		{
+			pipelineLayoutCreateInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
+			pipelineLayoutCreateInfo.pPushConstantRanges = pushConstantRanges.data();
+		}
 
 		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 		VK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
@@ -316,7 +324,7 @@ namespace Niagara
 		assert(renderPass);
 
 #if USE_SPIRV_CROSS
-		NewGatherDescriptors();
+		SpirvCrossGatherDescriptors();
 
 		this->descriptorSetLayouts = CreateDescriptorSetLayouts(device, g_PushDescriptorsSupported);
 
@@ -344,6 +352,7 @@ namespace Niagara
 
 			descriptorSetLayouts.clear();
 		}
+
 		if (descriptorUpdateTemplate)
 		{
 			vkDestroyDescriptorUpdateTemplate(device, descriptorUpdateTemplate, nullptr);
@@ -369,9 +378,7 @@ namespace Niagara
 	{
 		Pipeline::Init(device);
 
-		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, g_PushDescriptorsSupported);
-		assert(descriptorUpdateTemplate);
-		this->descriptorUpdateTemplate = descriptorUpdateTemplate;
+		descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, g_PushDescriptorsSupported);
 
 		auto shaderStages = GetShaderStagesCreateInfo();
 
@@ -417,10 +424,8 @@ namespace Niagara
 	{
 		Pipeline::Init(device);
 
-		auto descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, 0, g_PushDescriptorsSupported);
-		assert(descriptorUpdateTemplate);
-		this->descriptorUpdateTemplate = descriptorUpdateTemplate;
-
+		descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, 0, g_PushDescriptorsSupported);
+		
 		// TODO...
 	}
 

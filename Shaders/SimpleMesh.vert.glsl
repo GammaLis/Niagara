@@ -1,5 +1,8 @@
 #version 450 core
 
+#extension GL_GOOGLE_include_directive  : require
+#include "Common.h"
+
 #define VERTEX_INPUT_MODE 1
 #define VERTEX_ALIGNMENT 1
 #define USE_8BIT_16BIT_EXTENSIONS 1
@@ -11,6 +14,15 @@
 #extension GL_EXT_shader_explicit_arithmetic_types  : require
 // #extension GL_KHR_shader_explicit_arithmetic_types  : require
 #endif
+
+
+#if 0
+layout (binding = 0) uniform ObjectUniformBuffer
+{
+    mat4 objToWorldMatrix;
+};
+#endif
+
 
 #if VERTEX_INPUT_MODE == 1
 struct Vertex
@@ -84,11 +96,11 @@ void main()
     vec2 texcoord0 = v.texcoord0;
 
 #else // VERTEX_ALIGNMENT
-    vec3 position = vec3(vertices[gl_VertexIndex].px, vertices[gl_VertexIndex].py, vertices[gl_VertexIndex].pz);
+    vec3 posOS = vec3(vertices[gl_VertexIndex].px, vertices[gl_VertexIndex].py, vertices[gl_VertexIndex].pz);
 #if USE_8BIT_16BIT_EXTENSIONS
-    vec3 fNormal = vec3(int(vertices[gl_VertexIndex].nx), int(vertices[gl_VertexIndex].ny), int(vertices[gl_VertexIndex].nz)) / 127.0f - 1.0f;
+    vec3 normalOS = vec3(int(vertices[gl_VertexIndex].nx), int(vertices[gl_VertexIndex].ny), int(vertices[gl_VertexIndex].nz)) / 127.0f - 1.0f;
 #else // USE_8BIT_16BIT_EXTENSIONS
-    vec3 fNormal = vec3(vertices[gl_VertexIndex].nx, vertices[gl_VertexIndex].ny, vertices[gl_VertexIndex].nz);
+    vec3 normalOS = vec3(vertices[gl_VertexIndex].nx, vertices[gl_VertexIndex].ny, vertices[gl_VertexIndex].nz);
 #endif // USE_8BIT_16BIT_EXTENSIONS
     vec2 texcoord0 = vec2(vertices[gl_VertexIndex].s, vertices[gl_VertexIndex].t);
 #endif // VERTEX_ALIGNMENT
@@ -96,14 +108,16 @@ void main()
 #else // VERTEX_INPUT_MODE
 
 #if USE_8BIT_16BIT_EXTENSIONS
-    vec3 fNormal = vec3(normal.xyz) / 127.0f - 1.0f;
+    vec3 normalOS = vec3(normal.xyz) / 127.0f - 1.0f;
 #endif // USE_8BIT_16BIT_EXTENSIONS
 
 #endif // VERTEX_INPUT_MODE
 
-    position.z = position.z * 0.5 + 0.5;
-    gl_Position = vec4(position, 1.0f);
+    vec4 position = vec4(posOS, 1.0);
+    position = _View.viewProjMatrix * position;
 
-    outNormal = fNormal;
+    gl_Position = position;
+
+    outNormal = normalOS;
     outUV = texcoord0;
 }

@@ -53,6 +53,17 @@ namespace Niagara
 		return (n < EPS) ? glm::vec3(0.0f) : v / n;
 	}
 
+	// https://nlguillemot.wordpress.com/2016/12/07/reversed-z-in-opengl/
+	inline glm::mat4 MakeInfReversedZProjRH(float fovy, float aspect, float zNear)
+	{
+		float f = 1.0f / tan(fovy / 2.0f);
+		return glm::mat4(
+			f / aspect, 0.0f, 0.0f, 0.0f,
+			0.0f,	 f,  0.0f,  0.0f,
+			0.0f, 0.0f,  0.0f, -1.0f,
+			0.0f, 0.0f, zNear,  0.0f);
+	}
+
 
 	/// Miscs
 
