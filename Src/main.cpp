@@ -24,6 +24,7 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtc/random.hpp>
 
 
 /// Mesh
@@ -55,6 +56,8 @@ constexpr uint32_t HEIGHT = 600;
 
 constexpr uint32_t MESHLET_MAX_VERTICES = 64;
 constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
+
+constexpr uint32_t DRAW_COUNT = 100;
 
 const std::string g_ResourcePath = "../Resources/";
 
@@ -307,16 +310,37 @@ struct alignas(16) Meshlet
 	uint8_t triangleCount = 0;
 };
 
-struct Mesh
+struct alignas(16) Mesh
+{
+	glm::vec4 boundingSphere;
+	uint32_t vertexOffset;
+	uint32_t vertexCount;
+	uint32_t indexOffset;
+	uint32_t indexCount;
+	uint32_t meshletOffset;
+	uint32_t meshletCount;
+};
+
+struct Geometry
 {
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
 	std::vector<uint32_t> meshletData;
 	std::vector<Meshlet> meshlets;
+
+	std::vector<Mesh> meshes;
 };
 
 struct alignas(16) MeshDraw
 {
+	glm::vec4 worldMatRow0;
+	glm::vec4 worldMatRow1;
+	glm::vec4 worldMatRow2;
+
+	uint32_t vertexOffset;
+	uint32_t meshletOffset;
+	uint32_t meshletCount;
+
 	union
 	{
 		uint32_t commandData[7];
@@ -874,7 +898,7 @@ VkFramebuffer GetFramebuffer(VkDevice device, const std::vector<VkImageView> &at
 }
 
 void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipeline,
-	const std::vector<VkFramebuffer> &framebuffers, uint32_t imageIndex, const Mesh &mesh, const VkRect2D &viewportRect)
+	const std::vector<VkFramebuffer> &framebuffers, uint32_t imageIndex, const Geometry &geometry, const VkRect2D &viewportRect)
 {
 	const auto &renderPass = pipeline.renderPass;
 
@@ -931,6 +955,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 	auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshletDataBuffer.size));
 	g_CommandContext.SetDescriptor(meshletDataInfo, DescriptorBindings::MeshletDataBuffer);
 
+#endif
+
 	// Indirect draws
 #if USE_MULTI_DRAW_INDIRECT
 	const auto& drawBuffer = g_BufferMgr.drawCommandBuffer;
@@ -938,8 +964,6 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 	auto drawBufferInfo = Niagara::DescriptorInfo(drawBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawBuffer.size));
 	g_CommandContext.SetDescriptor(drawBufferInfo, DescriptorBindings::MeshDrawBuffer);
 #endif // USE_MULTI_DRAW_INDIRECT
-
-#endif
 
 #endif
 
@@ -965,12 +989,13 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 #else
 	if (ib.size > 0)
 	{
+		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+
 #if USE_MULTI_DRAW_INDIRECT
 		const auto& drawBuffer = g_BufferMgr.drawCommandBuffer;
 		vkCmdDrawIndexedIndirect(cmd, drawBuffer.buffer, offsetof(MeshDraw, drawIndexedIndirectCommand), drawBuffer.elementCount, sizeof(MeshDraw));
 
 #else
-		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 		vkCmdDrawIndexed(cmd, ib.elementCount, 1, 0, 0, 0);
 #endif
 	}
@@ -1079,11 +1104,11 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 
 void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex,
 	VkCommandBuffer cmd, Niagara::GraphicsPipeline &pipeline, VkQueue graphicsQueue,
-	std::vector<VkFramebuffer> &framebuffers, const Mesh &mesh, const VkRect2D &viewportRect)
+	std::vector<VkFramebuffer> &framebuffers, const Geometry &geometry, const VkRect2D &viewportRect)
 {
 	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
- 	RecordCommandBuffer(cmd, pipeline, framebuffers, imageIndex, mesh, viewportRect);
+ 	RecordCommandBuffer(cmd, pipeline, framebuffers, imageIndex, geometry, viewportRect);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -1180,7 +1205,79 @@ bool LoadObj(std::vector<Vertex> &vertices, const char* path)
 	return true;
 }
 
-bool LoadMesh(Mesh& mesh, const char* path, bool bIndexless = false)
+size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
+{
+	static const float ConeWeight = 0.25f;
+	auto meshletCount = meshopt_buildMeshletsBound(indices.size(), MESHLET_MAX_VERTICES, MESHLET_MAX_PRIMITIVES);
+	std::vector<meshopt_Meshlet> optMeshlets(meshletCount);
+	std::vector<uint32_t> meshlet_vertices(meshletCount * MESHLET_MAX_VERTICES);
+	std::vector<uint8_t> meshlet_triangles(meshletCount * MESHLET_MAX_PRIMITIVES * 3);
+	meshletCount = meshopt_buildMeshlets(
+		optMeshlets.data(),
+		meshlet_vertices.data(),
+		meshlet_triangles.data(),
+		indices.data(),
+		indices.size(),
+		&vertices[0].p.x,
+		vertices.size(),
+		sizeof(Vertex),
+		MESHLET_MAX_VERTICES,
+		MESHLET_MAX_PRIMITIVES,
+		ConeWeight);
+	optMeshlets.resize(meshletCount);
+
+	// Append meshlet data
+	uint32_t vertexCount = 0, indexGroupCount = 0;
+	for (const auto& optMeshlet : optMeshlets)
+	{
+		vertexCount += optMeshlet.vertex_count;
+		indexGroupCount += Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
+	}
+	uint32_t meshletDataOffset = static_cast<uint32_t>(result.meshletData.size());
+	result.meshletData.insert(result.meshletData.end(), vertexCount + indexGroupCount, 0);
+
+	uint32_t meshletOffset = static_cast<uint32_t>(result.meshlets.size());
+	result.meshlets.insert(result.meshlets.end(), meshletCount, {});
+
+	for (uint32_t i = 0; i < meshletCount; ++i)
+	{
+		const auto& optMeshlet = optMeshlets[i];
+		auto& meshlet = result.meshlets[meshletOffset + i];
+
+		// Meshlet
+		meshopt_Bounds bounds = meshopt_computeMeshletBounds(
+			&meshlet_vertices[optMeshlet.vertex_offset],
+			&meshlet_triangles[optMeshlet.triangle_offset],
+			optMeshlet.triangle_count,
+			&vertices[0].p.x,
+			vertices.size(),
+			sizeof(Vertex));
+		meshlet.vertexCount = optMeshlets[i].vertex_count;
+		meshlet.triangleCount = optMeshlets[i].triangle_count;
+		meshlet.vertexOffset = meshletDataOffset;
+		meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
+		meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[0], 0);
+		meshlet.cone = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
+
+		// Vertex indices
+		for (uint32_t j = 0; j < optMeshlet.vertex_count; ++j)
+			result.meshletData[meshletDataOffset + j] = meshlet_vertices[optMeshlet.vertex_offset + j];
+
+		meshletDataOffset += optMeshlet.vertex_count;
+
+		// Triangle indices (packed in 4 bytes)
+		const uint32_t* indexGroups = reinterpret_cast<uint32_t*>(&meshlet_triangles[optMeshlet.triangle_offset]);
+		uint32_t indexGroupCount = Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
+		for (uint32_t j = 0; j < indexGroupCount; ++j)
+			result.meshletData[meshletDataOffset + j] = indexGroups[j];
+
+		meshletDataOffset += indexGroupCount;
+	}
+
+	return meshletCount;
+}
+
+bool LoadMesh(Geometry &result, const char* path, bool bBuildMeshlets = true, bool bIndexless = false)
 {
 	std::vector<Vertex> triVertices;
 	if (!LoadObj(triVertices, path))
@@ -1188,9 +1285,14 @@ bool LoadMesh(Mesh& mesh, const char* path, bool bIndexless = false)
 
 	size_t indexCount = triVertices.size();
 
+	// FIXME: not used now
 	if (bIndexless)
 	{
-		mesh.vertices = triVertices;
+		Mesh mesh{};
+		mesh.vertexOffset = static_cast<uint32_t>(result.vertices.size());
+		mesh.vertexCount = static_cast<uint32_t>(triVertices.size());
+
+		result.vertices.insert(result.vertices.end(), triVertices.begin(), triVertices.end());
 #if 0
 		mesh.indices.resize(indexCount);
 		for (size_t i = 0; i < indexCount; ++i)
@@ -1211,8 +1313,27 @@ bool LoadMesh(Mesh& mesh, const char* path, bool bIndexless = false)
 		meshopt_optimizeVertexCache(indices.data(), indices.data(), indexCount, vertexCount);
 		meshopt_optimizeVertexFetch(vertices.data(), indices.data(), indexCount, vertices.data(), vertexCount, sizeof(Vertex));
 
-		mesh.vertices.insert(mesh.vertices.end(), vertices.begin(), vertices.end());
-		mesh.indices.insert(mesh.indices.end(), indices.begin(), indices.end());
+		// Mesh
+		result.meshes.push_back({});
+		auto& mesh = result.meshes.back();
+		{
+			mesh.vertexOffset = static_cast<uint32_t>(result.vertices.size());
+			mesh.vertexCount = static_cast<uint32_t>(vertexCount);
+			mesh.indexOffset = static_cast<uint32_t>(result.indices.size());
+			mesh.indexCount = static_cast<uint32_t>(indexCount);
+		}
+
+		// Vertices & indices
+		{
+			result.vertices.insert(result.vertices.end(), vertices.begin(), vertices.end());
+			result.indices.insert(result.indices.end(), indices.begin(), indices.end());
+		}
+
+		// Meshlets
+		{
+			mesh.meshletOffset = static_cast<uint32_t>(result.meshlets.size());
+			mesh.meshletCount = bBuildMeshlets ? static_cast<uint32_t>(BuildOptMeshlets(result, vertices, indices)) : 0;
+		}
 	}
 
 	// TODO: optimize the mesh for more efficient GPU rendering
@@ -1320,78 +1441,6 @@ void BuildMeshletCones(Mesh &mesh)
 }
 
 #endif
-
-size_t BuildOptMeshlets(Mesh &mesh)
-{
-	static const float ConeWeight = 0.25f;
-	auto meshletCount = meshopt_buildMeshletsBound(mesh.indices.size(), MESHLET_MAX_VERTICES, MESHLET_MAX_PRIMITIVES);
-	std::vector<meshopt_Meshlet> optMeshlets(meshletCount);
-	std::vector<uint32_t> meshlet_vertices(meshletCount * MESHLET_MAX_VERTICES);
-	std::vector<uint8_t> meshlet_triangles(meshletCount * MESHLET_MAX_PRIMITIVES * 3);
-	meshletCount = meshopt_buildMeshlets(
-		optMeshlets.data(), 
-		meshlet_vertices.data(), 
-		meshlet_triangles.data(), 
-		mesh.indices.data(), 
-		mesh.indices.size(),
-		&mesh.vertices[0].p.x, 
-		mesh.vertices.size(), 
-		sizeof(Vertex), 
-		MESHLET_MAX_VERTICES, 
-		MESHLET_MAX_PRIMITIVES, 
-		ConeWeight);
-	optMeshlets.resize(meshletCount);
-
-	// Append meshlet data
-	uint32_t vertexCount = 0, indexGroupCount = 0;
-	for (const auto& optMeshlet : optMeshlets)
-	{
-		vertexCount += optMeshlet.vertex_count;
-		indexGroupCount += Niagara::DivideAndRoundUp(optMeshlet.triangle_count*3, 4);
-	}
-	uint32_t meshletDataOffset = static_cast<uint32_t>(mesh.meshletData.size());
-	mesh.meshletData.insert(mesh.meshletData.end(), vertexCount + indexGroupCount, 0);
-
-	uint32_t meshletOffset = static_cast<uint32_t>(mesh.meshlets.size());
-	mesh.meshlets.insert(mesh.meshlets.end(), meshletCount, {});
-	
-	for (uint32_t i = 0; i < meshletCount; ++i)
-	{
-		const auto& optMeshlet = optMeshlets[i];
-		auto& meshlet = mesh.meshlets[meshletOffset + i];
-
-		// Meshlet
-		meshopt_Bounds bounds = meshopt_computeMeshletBounds(
-			&meshlet_vertices[optMeshlet.vertex_offset],
-			&meshlet_triangles[optMeshlet.triangle_offset],
-			optMeshlet.triangle_count,
-			&mesh.vertices[0].p.x,
-			mesh.vertices.size(),
-			sizeof(Vertex));
-		meshlet.vertexCount = optMeshlets[i].vertex_count;
-		meshlet.triangleCount = optMeshlets[i].triangle_count;
-		meshlet.vertexOffset = meshletDataOffset;
-		meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
-		meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[0], 0);
-		meshlet.cone = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
-
-		// Vertex indices
-		for (uint32_t j = 0; j < optMeshlet.vertex_count; ++j)
-			mesh.meshletData[meshletDataOffset + j] = meshlet_vertices[optMeshlet.vertex_offset +j];
-		
-		meshletDataOffset += optMeshlet.vertex_count;
-
-		// Triangle indices (packed in 4 bytes)
-		const uint32_t* indexGroups = reinterpret_cast<uint32_t*>(&meshlet_triangles[optMeshlet.triangle_offset]);
-		uint32_t indexGroupCount = Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
-		for (uint32_t j = 0; j < indexGroupCount; ++j)
-			mesh.meshletData[meshletDataOffset + j] = indexGroups[j];
-
-		meshletDataOffset += indexGroupCount;
-	}
-
-	return meshletCount;
-}
 
 
 int main()
@@ -1582,47 +1631,72 @@ int main()
 	auto& viewUniformBuffer = g_BufferMgr.viewUniformBuffer;
 	viewUniformBuffer.Init(device, sizeof(ViewUniformBufferParameters), 1, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
 
-	// Mesh
-	Mesh mesh{};
+	// Geometry
+	Geometry geometry{};
 	
-	const std::string fileName{ "kitten.obj" };
-	bool bLoaded = LoadMesh(mesh, std::string(g_ResourcePath + fileName).data());
-	if (!bLoaded)
+	const std::vector<std::string> objFileNames{ "kitten.obj", "bunny.obj"}; // kitten bunny
+	for (const auto& fileName : objFileNames)
 	{
-		std::cout << "Load mesh failed: " << fileName << std::endl;
+		bool bLoaded = LoadMesh(geometry, std::string(g_ResourcePath + fileName).data(), USE_MESHLETS);
+		if (!bLoaded)
+			std::cout << "Load mesh failed: " << fileName << std::endl;
+	}
+
+	if (geometry.meshes.empty())
+	{
+		std::cout << "ERROR::No mesh loaded!\n";
 		return -1;
 	}
 
-#if USE_MESHLETS
-	// Meshlets
-	// BuildMeshlets(mesh);
-	// BuildMeshletCones(mesh);
-	auto meshletCount = BuildOptMeshlets(mesh);
-	assert(!mesh.meshlets.empty() && !mesh.meshletData.empty());
-#endif
+	const uint32_t meshCount = static_cast<uint32_t>(geometry.meshes.size());
 
 	GpuBuffer &vb = g_BufferMgr.vertexBuffer, &ib = g_BufferMgr.indexBuffer;
-	vb.Init(device, sizeof(Vertex), static_cast<uint32_t>(mesh.vertices.size()), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.vertices.data());
+	vb.Init(device, sizeof(Vertex), static_cast<uint32_t>(geometry.vertices.size()), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.vertices.data());
 
-	if (!mesh.indices.empty())
+	if (!geometry.indices.empty())
 	{
-		ib.Init(device, sizeof(uint32_t), static_cast<uint32_t>(mesh.indices.size()), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.indices.data());
+		ib.Init(device, sizeof(uint32_t), static_cast<uint32_t>(geometry.indices.size()), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.indices.data());
 	}
 
 	// Indirect draw command buffers
 #if USE_MULTI_DRAW_INDIRECT
 	// Preparing indirect draw commands
-	const uint32_t DrawCount = 100;
+	const uint32_t DrawCount = DRAW_COUNT;
+	const float SceneRadius = 10.0f;
 	std::vector<MeshDraw> meshDraws(DrawCount);
 	for (uint32_t i = 0; i < DrawCount; ++i)
 	{
 		auto& draw = meshDraws[i];
 
+		// World matrix
+		auto t = glm::ballRand<float>(SceneRadius);
+		auto s = glm::vec3(glm::linearRand(1.0f, 2.0f));
+		
+		auto theta = glm::radians(glm::linearRand<float>(0.0f, 180.0));
+		auto axis = glm::sphericalRand(1.0f);
+		auto r = glm::quat(cosf(theta), axis * sinf(theta));
+
+		glm::mat4 worldMat = glm::translate(glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), s), t);
+		draw.worldMatRow0 = glm::vec4(worldMat[0][0], worldMat[1][0], worldMat[2][0], worldMat[3][0]);
+		draw.worldMatRow1 = glm::vec4(worldMat[0][1], worldMat[1][1], worldMat[2][1], worldMat[3][1]);
+		draw.worldMatRow2 = glm::vec4(worldMat[0][2], worldMat[1][2], worldMat[2][2], worldMat[3][2]);
+
+		// Draw command
+		uint32_t meshId = glm::linearRand<uint32_t>(0, meshCount-1);
+		const Mesh& mesh = geometry.meshes[meshId];
+
+		draw.vertexOffset = mesh.vertexOffset;
+		draw.meshletOffset = mesh.meshletOffset;
+		draw.meshletCount = mesh.meshletCount;
+
 		memset(&draw.commandData, 0, sizeof(draw.commandData));
-		draw.drawIndexedIndirectCommand.indexCount = static_cast<uint32_t>(mesh.indices.size());
+
+		draw.drawIndexedIndirectCommand.indexCount = mesh.indexCount;
+		draw.drawIndexedIndirectCommand.firstIndex = mesh.indexOffset;
+		draw.drawIndexedIndirectCommand.vertexOffset = mesh.vertexOffset;
 		draw.drawIndexedIndirectCommand.instanceCount = 1;
 
-		uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
+		uint32_t nTask = static_cast<uint32_t>(mesh.meshletCount);
 		draw.drawMeshTaskIndirectCommand.taskCount = Niagara::DivideAndRoundUp(nTask, 32);
 	}
 	// Indirect draw command buffer
@@ -1633,10 +1707,10 @@ int main()
 
 #if USE_MESHLETS
 	GpuBuffer& meshletBuffer = g_BufferMgr.meshletBuffer;
-	meshletBuffer.Init(device, sizeof(Meshlet), static_cast<uint32_t>(mesh.meshlets.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshlets.data());
+	meshletBuffer.Init(device, sizeof(Meshlet), static_cast<uint32_t>(geometry.meshlets.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshlets.data());
 
 	GpuBuffer& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
-	meshletDataBuffer.Init(device, 4, static_cast<uint32_t>(mesh.meshletData.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, mesh.meshletData.data());
+	meshletDataBuffer.Init(device, 4, static_cast<uint32_t>(geometry.meshletData.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshletData.data());
 #endif
 
 	uint32_t currentFrame = 0;
@@ -1751,7 +1825,7 @@ int main()
 
 
 		Render(device, currentSyncObjects, imageIndex, currentCommandBuffer, 
-			pipeline, graphicsQueue, framebuffers, mesh, { {0, 0}, swapchain.extent});
+			pipeline, graphicsQueue, framebuffers, geometry, { {0, 0}, swapchain.extent});
 
 		{
 			auto cmd = Niagara::BeginSingleTimeCommands();

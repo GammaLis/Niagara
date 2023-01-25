@@ -47,11 +47,29 @@ struct Meshlet
 
 struct MeshDraw
 {
+	vec4 worldMatRow0;
+	vec4 worldMatRow1;
+	vec4 worldMatRow2;
+
+	uint vertexOffset;
+	uint meshletOffset;
+	uint meshletCount;
+
 	uint commandData[7];
 };
 
 
 /// Functions
+
+mat4 BuildWorldMatrix(vec4 row0, vec4 row1, vec4 row2)
+{
+	return mat4(
+		vec4(row0.x, row1.x, row2.x, 0.0f),
+        vec4(row0.y, row1.y, row2.y, 0.0f), 
+        vec4(row0.z, row1.z, row2.z, 0.0f),
+        vec4(row0.w, row1.w, row2.w, 1.0f));
+}
+
 // Ref: UE - RayTracingDebug.usf
 uint MurmurMix(uint Hash)
 {

@@ -124,6 +124,7 @@ void main()
 	const uint localThreadId = gl_LocalInvocationID.x;
 
 	const MeshDraw meshDraw = draws[gl_DrawIDARB];
+	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
 	const uint vertexCount = uint(meshlets[meshletIndex].vertexCount);
 	const uint triangleCount = uint(meshlets[meshletIndex].triangleCount);
@@ -137,12 +138,12 @@ void main()
 	// Vertices
 	for (uint i = localThreadId; i < vertexCount; i += GROUP_SIZE)
 	{
-		uint vi = meshletData[vertexOffset + i];
+		uint vi = meshletData[vertexOffset + i] + meshDraw.vertexOffset;
 
 		vec3 posOS = vec3(vertices[vi].px, vertices[vi].py, vertices[vi].pz);
 
 		// position.z = position.z * 0.5 + 0.5;
-		vec4 position = _View.viewProjMatrix * vec4(posOS, 1.0);
+		vec4 position = _View.viewProjMatrix * worldMat * vec4(posOS, 1.0);
 		vec3 normal = vec3(uint(vertices[vi].nx), uint(vertices[vi].ny), uint(vertices[vi].nz)) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].s, vertices[vi].t);
 

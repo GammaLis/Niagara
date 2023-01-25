@@ -92,9 +92,12 @@ void main()
 {
 	const uint groupId = gl_WorkGroupID.x;
 	const uint localThreadId = gl_LocalInvocationID.x;
-	const uint meshletIndex = groupId * GROUP_SIZE + localThreadId;
+	const uint localThreadIdStart = groupId * GROUP_SIZE;
 
 	const MeshDraw meshDraw = draws[gl_DrawIDARB];
+	const uint meshletIndex = localThreadIdStart + localThreadId + meshDraw.meshletOffset;
+
+	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
 	vec3 viewDir = vec3(0, 0, 1);
 
@@ -102,13 +105,25 @@ void main()
 
 #if USE_SUBGROUP
 
-#if 0
-	bool accept = !ConeCull(meshlets[meshletIndex].cone, viewDir);
-#elif 0
-	bool accept = !ConeCull_ConeApex(meshlets[meshletIndex].cone, meshlets[meshletIndex].coneApex.xyz, _View.camPos);
-#elif 1
-	bool accept = !ConeCull_BoundingSphere(meshlets[meshletIndex].cone, meshlets[meshletIndex].boundingSphere, _View.camPos);
-#endif
+	bool accept = false;
+
+	if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset) 
+	{
+		vec4 cone = meshlets[meshletIndex].cone;
+		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
+
+	#if 0
+		accept = !ConeCull(cone, viewDir);
+	#elif 0
+		vec3 coneApex = meshlets[meshletIndex].coneApex.xyz;
+		coneApex = (worldMat * vec4(coneApex, 1.0)).xyz;
+		accept = !ConeCull_ConeApex(cone, coneApex, _View.camPos);
+	#elif 1
+		vec4 boundingSphere = meshlets[meshletIndex].boundingSphere;
+		boundingSphere.xyz = (worldMat * vec4(boundingSphere.xyz, 1.0)).xyz;
+		accept = !ConeCull_BoundingSphere(cone, boundingSphere, _View.camPos);
+	#endif
+	}
 	uvec4 ballot = subgroupBallot(accept);
 	uint index = subgroupBallotExclusiveBitCount(ballot);
 
@@ -129,10 +144,16 @@ void main()
 	// Sync
 	memoryBarrierShared();
 
-	if (!ConeCull(meshlets[meshletIndex].cone, viewDir))
+	if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	{
-		uint index = atomicAdd(sh_MeshletCount, 1);
-		meshletIndices[index] = meshletIndex;
+		vec4 cone = meshlets[meshletIndex].cone;
+		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
+
+		if (!ConeCull(cone, viewDir))
+		{
+			uint index = atomicAdd(sh_MeshletCount, 1);
+			meshletIndices[index] = meshletIndex;
+		}
 	}
 	
 	// Sync
@@ -143,8 +164,9 @@ void main()
 #endif
 
 #else
+	if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	meshletIndices[localThreadId] = meshletIndex;
 	if (localThreadId == 0)
-		gl_TaskCountNV = GROUP_SIZE;
+		gl_TaskCountNV = min(GROUP_SIZE, meshDraw.meshletCount - localThreadIdStart);
 #endif
 }

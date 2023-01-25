@@ -15,6 +15,8 @@
 // #extension GL_KHR_shader_explicit_arithmetic_types  : require
 #endif
 
+#extension GL_ARB_shader_draw_parameters    : require // gl_DrawIDARB
+
 
 #if 0
 layout (binding = 0) uniform ObjectUniformBuffer
@@ -54,9 +56,28 @@ struct Vertex
 #endif
 };
 
+struct MeshDraw
+{
+    vec4 worldMatRow0;
+    vec4 worldMatRow1;
+    vec4 worldMatRow2;
+    
+    uint vertexOffset;
+    uint meshletOffset;
+    uint meshletCount;
+
+    uint commandData[7];
+};
+
+
 layout (std430, binding = 0) readonly buffer Vertices
 {
     Vertex vertices[];
+};
+
+layout (binding = 3) buffer Draws
+{
+    MeshDraw draws[];
 };
 
 #else // VERTEX_INPUT_MODE
@@ -84,6 +105,8 @@ void main()
     // The SPIR-V Capability (Int8) was declared, but none of the requirements were met to use it.
     // => Access the buffer directly.
     // Vertex v = vertices[gl_VertexIndex];
+
+    MeshDraw meshDraw = draws[gl_DrawIDARB];
 
 #if !VERTEX_ALIGNMENT
     // NOT USED NOW
@@ -113,8 +136,13 @@ void main()
 
 #endif // VERTEX_INPUT_MODE
 
+    const mat4 worldMat = mat4(
+        vec4(meshDraw.worldMatRow0.x, meshDraw.worldMatRow1.x, meshDraw.worldMatRow2.x, 0.0f),
+        vec4(meshDraw.worldMatRow0.y, meshDraw.worldMatRow1.y, meshDraw.worldMatRow2.y, 0.0f), 
+        vec4(meshDraw.worldMatRow0.z, meshDraw.worldMatRow1.z, meshDraw.worldMatRow2.z, 0.0f),
+        vec4(meshDraw.worldMatRow0.w, meshDraw.worldMatRow1.w, meshDraw.worldMatRow2.w, 1.0f));
     vec4 position = vec4(posOS, 1.0);
-    position = _View.viewProjMatrix * position;
+    position = _View.viewProjMatrix * worldMat * position;
 
     gl_Position = position;
 
