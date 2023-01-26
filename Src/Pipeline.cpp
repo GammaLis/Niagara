@@ -321,7 +321,6 @@ namespace Niagara
 	void Pipeline::Init(VkDevice device)
 	{
 		assert(ShadersValid());
-		assert(renderPass);
 
 #if USE_SPIRV_CROSS
 		SpirvCrossGatherDescriptors();
@@ -341,6 +340,9 @@ namespace Niagara
 		auto pipelineLayout = CreatePipelineLayout(device, g_PushDescriptorsSupported);
 		assert(pipelineLayout);
 		this->layout = pipelineLayout;
+
+		shaderStagesInfo = GetShaderStagesCreateInfo();
+		assert(!shaderStagesInfo.empty());
 	}
 
 	void Pipeline::Destroy(VkDevice device)
@@ -376,18 +378,18 @@ namespace Niagara
 
 	void GraphicsPipeline::Init(VkDevice device)
 	{
+		assert(renderPass);
+
 		Pipeline::Init(device);
 
 		descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, g_PushDescriptorsSupported);
-
-		auto shaderStages = GetShaderStagesCreateInfo();
 
 		pipelineState.Update();
 
 		VkGraphicsPipelineCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-		createInfo.pStages = shaderStages.data();
-		createInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+		createInfo.pStages = shaderStagesInfo.data();
+		createInfo.stageCount = static_cast<uint32_t>(shaderStagesInfo.size());
 		createInfo.pVertexInputState = &pipelineState.vertexInputState; // <--
 		createInfo.pInputAssemblyState = &pipelineState.inputAssemblyState;
 		createInfo.pViewportState = &pipelineState.viewportState; // <--
@@ -426,7 +428,14 @@ namespace Niagara
 
 		descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, 0, g_PushDescriptorsSupported);
 		
-		// TODO...
+		VkComputePipelineCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+		createInfo.stage = shaderStagesInfo[0];
+		createInfo.layout = layout;
+		
+		pipeline = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateComputePipelines(device, pipelineCache, 1, &createInfo, nullptr, &pipeline));
+		assert(pipeline);
 	}
 
 	void ComputePipeline::Destroy(VkDevice device)

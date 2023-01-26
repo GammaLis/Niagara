@@ -215,6 +215,9 @@
     <ClInclude Include="..\External\SPIRV-Cross\spirv_glsl.hpp" />
     <ClInclude Include="..\External\SPIRV-Cross\spirv_parser.hpp" />
     <ClInclude Include="..\External\volk\volk.h" />
+    <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
     <None Include="..\Shaders\MeshCommon.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="CommandManager.h" />

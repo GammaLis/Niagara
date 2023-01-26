@@ -61,14 +61,15 @@ struct MeshDraw
     vec4 worldMatRow0;
     vec4 worldMatRow1;
     vec4 worldMatRow2;
-    
-    uint vertexOffset;
+
+    vec4 boundingSphere;
+
+    uint indexOffset;
+    uint indexCount;
+    int  vertexOffset;
     uint meshletOffset;
     uint meshletCount;
-
-    uint commandData[7];
 };
-
 
 layout (std430, binding = 0) readonly buffer Vertices
 {

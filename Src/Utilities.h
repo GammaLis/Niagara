@@ -37,12 +37,12 @@ namespace Niagara
 		}
 	}
 
-	inline int DivideAndRoundUp(int dividend, int divisor)
+	inline uint32_t DivideAndRoundUp(uint32_t dividend, uint32_t divisor)
 	{
 		return (dividend + divisor - 1) / divisor;
 	}
 
-	inline int DivideAndRoundDown(int dividend, int divisor)
+	inline uint32_t DivideAndRoundDown(uint32_t dividend, uint32_t divisor)
 	{
 		return dividend / divisor;
 	}
@@ -64,6 +64,7 @@ namespace Niagara
 			0.0f, 0.0f, zNear,  0.0f);
 	}
 
+	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ = true);
 
 	/// Miscs
 

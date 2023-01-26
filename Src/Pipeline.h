@@ -159,9 +159,13 @@ namespace Niagara
 
 		VkPipeline pipeline = VK_NULL_HANDLE;
 		VkPipelineLayout layout = VK_NULL_HANDLE;
+		VkPipelineCache pipelineCache = VK_NULL_HANDLE;
 
 		const RenderPass* renderPass{ nullptr };
 		uint32_t subpass = 0;
+
+		// Stages
+		std::vector<VkPipelineShaderStageCreateInfo> shaderStagesInfo;
 
 		// Descriptors
 		std::vector<VkDescriptorSetLayout> descriptorSetLayouts;

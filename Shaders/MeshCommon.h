@@ -51,11 +51,25 @@ struct MeshDraw
 	vec4 worldMatRow1;
 	vec4 worldMatRow2;
 
-	uint vertexOffset;
+	vec4 boundingSphere;
+
+	uint indexOffset;
+	uint indexCount;
+	int  vertexOffset;
 	uint meshletOffset;
 	uint meshletCount;
+};
 
-	uint commandData[7];
+struct MeshDrawCommand
+{
+	uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+
+    uint taskCount;
+    uint firstTask;
 };
 
 
@@ -68,6 +82,14 @@ mat4 BuildWorldMatrix(vec4 row0, vec4 row1, vec4 row2)
         vec4(row0.y, row1.y, row2.y, 0.0f), 
         vec4(row0.z, row1.z, row2.z, 0.0f),
         vec4(row0.w, row1.w, row2.w, 1.0f));
+}
+
+vec3 GetScaleFromWorldMatrix(mat4 worldMatrix)
+{
+	float sx = sqrt(dot(worldMatrix[0], worldMatrix[0]));
+	float sy = sqrt(dot(worldMatrix[1], worldMatrix[1]));
+	float sz = sqrt(dot(worldMatrix[2], worldMatrix[2]));
+	return vec3(sx, sy, sz);
 }
 
 // Ref: UE - RayTracingDebug.usf

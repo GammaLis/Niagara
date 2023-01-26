@@ -27,6 +27,28 @@ namespace Niagara
 		return buffer;
 	}
 
+	/// Math
+	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ)
+	{
+		glm::mat4 mt = glm::transpose(matrix);
+
+		frustumPlanes[0] = -mt[0] - mt[3];
+		frustumPlanes[1] = +mt[0] - mt[3];
+		frustumPlanes[2] = -mt[1] - mt[3];
+		frustumPlanes[3] = +mt[1] - mt[3];
+
+		if (reversedZ)
+		{
+			frustumPlanes[4] = +mt[2] - mt[3];
+			frustumPlanes[5] = -mt[2];
+		}
+		else
+		{
+			frustumPlanes[4] = -mt[2];
+			frustumPlanes[5] = +mt[2] - mt[3];
+		}		
+	}
+
 	/// Miscs
 
 	double GetSystemTime()

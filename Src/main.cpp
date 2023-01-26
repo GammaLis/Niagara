@@ -58,6 +58,8 @@ constexpr uint32_t MESHLET_MAX_VERTICES = 64;
 constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
 
 constexpr uint32_t DRAW_COUNT = 100;
+constexpr float SCENE_RADIUS = 10.0f;
+constexpr float MAX_DRAW_DISTANCE = 8.0f;
 
 const std::string g_ResourcePath = "../Resources/";
 
@@ -206,7 +208,11 @@ enum DescriptorBindings : uint32_t
 	VertexBuffer		= 0,
 	MeshletBuffer		= 1,
 	MeshletDataBuffer	= 2,
-	MeshDrawBuffer		= 3
+	MeshDrawBuffer		= 3,
+
+	// TODO: put these another place
+	// Globals 
+	ViewUniformBuffer	= 4
 };
 
 
@@ -336,21 +342,22 @@ struct alignas(16) MeshDraw
 	glm::vec4 worldMatRow0;
 	glm::vec4 worldMatRow1;
 	glm::vec4 worldMatRow2;
+	
+	glm::vec4 boundingSphere;
 
-	uint32_t vertexOffset;
+	uint32_t indexOffset;
+	uint32_t indexCount;
+	int32_t  vertexOffset;
 	uint32_t meshletOffset;
 	uint32_t meshletCount;
-
-	union
-	{
-		uint32_t commandData[7];
-		struct
-		{
-			VkDrawIndexedIndirectCommand drawIndexedIndirectCommand; // 5 uint32_t
-			VkDrawMeshTasksIndirectCommandNV drawMeshTaskIndirectCommand; // 2 uint32_t
-		};
-	};
 };
+
+struct MeshDrawCommand
+{
+	VkDrawIndexedIndirectCommand drawIndexedIndirectCommand; // 5 uint32_t
+	VkDrawMeshTasksIndirectCommandNV drawMeshTaskIndirectCommand; // 2 uint32_t
+};
+
 
 struct GpuBuffer
 {
@@ -448,6 +455,9 @@ struct GpuBuffer
 struct alignas(16) ViewUniformBufferParameters
 {
 	glm::mat4 viewProjMatrix;
+	glm::mat4 viewMatrix;
+	glm::mat4 projMatrix;
+	glm::vec4 frustumPlanes[6];
 	glm::vec4 debugValue;
 	glm::vec3 camPos;
 };
@@ -461,7 +471,8 @@ struct BufferManager
 	// Storage buffers
 	GpuBuffer vertexBuffer;
 	GpuBuffer indexBuffer;
-	GpuBuffer drawCommandBuffer;
+	GpuBuffer drawDataBuffer;
+	GpuBuffer drawArgsBuffer;
 
 #if USE_MESHLETS
 	GpuBuffer meshletBuffer;
@@ -478,7 +489,8 @@ struct BufferManager
 		// Storage buffers
 		vertexBuffer.Destory(device);
 		indexBuffer.Destory(device);
-		drawCommandBuffer.Destory(device);
+		drawDataBuffer.Destory(device);
+		drawArgsBuffer.Destory(device);
 
 #if USE_MESHLETS
 		meshletBuffer.Destory(device);
@@ -489,6 +501,23 @@ struct BufferManager
 	}
 };
 BufferManager g_BufferMgr{};
+
+struct PipelineManager
+{
+	Niagara::RenderPass meshDrawPass;
+	Niagara::GraphicsPipeline meshDrawPipeline;
+	
+	Niagara::ComputePipeline updateDrawArgsPipeline;
+
+	void Cleanup(const Niagara::Device &device)
+	{
+		meshDrawPipeline.Destroy(device);
+		updateDrawArgsPipeline.Destroy(device);
+
+		meshDrawPass.Destroy(device);
+	}
+};
+PipelineManager g_PipelineMgr{};
 
 
 /**
@@ -897,15 +926,53 @@ VkFramebuffer GetFramebuffer(VkDevice device, const std::vector<VkImageView> &at
 	return framebuffer;
 }
 
-void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipeline,
-	const std::vector<VkFramebuffer> &framebuffers, uint32_t imageIndex, const Geometry &geometry, const VkRect2D &viewportRect)
+void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, uint32_t imageIndex, const Geometry &geometry, const VkRect2D &viewportRect)
 {
-	const auto &renderPass = pipeline.renderPass;
+	g_CommandContext.BeginCommandBuffer(cmd);
+
+	// Globals
+	auto viewUniformBufferParams = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
+
+	const auto& drawDataBuffer = g_BufferMgr.drawDataBuffer;
+	const auto& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
+
+	Niagara::DescriptorInfo drawBufferDescInfo(drawDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawDataBuffer.size));
+	Niagara::DescriptorInfo drawArgsDescInfo(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size));
+
+	uint32_t groupsX = 1, groupsY = 1, groupsZ = 1;
+	// Updaet draw args
+	{
+		const uint32_t GroupSize = 32;
+
+		auto& updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
+
+		g_CommandContext.BindPipeline(cmd, updateDrawArgsPipeline);
+
+		g_CommandContext.SetDescriptor(drawBufferDescInfo, 0);
+		g_CommandContext.SetDescriptor(drawArgsDescInfo, 1);
+		g_CommandContext.SetDescriptor(viewUniformBufferParams, DescriptorBindings::ViewUniformBuffer);
+
+		g_CommandContext.PushDescriptorSetWithTemplate(cmd);
+
+		groupsX = Niagara::DivideAndRoundUp(drawArgsBuffer.elementCount, GroupSize);
+		vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
+
+		g_CommandContext.BufferBarrier(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.size), VkDeviceSize(0), 
+			VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+
+		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
+	}
+
+	// Mesh draw pipeine
+
+	auto& meshDrawPipeline = g_PipelineMgr.meshDrawPipeline;
+
+	const auto &renderPass = meshDrawPipeline.renderPass;
 
 	// Clear values
 
 	VkClearValue clearColor;
-	clearColor.color = { 0.2f, 0.2f, 0.6f, 1.0f };
+	clearColor.color = { 0.2f, 0.2f, 0.8f, 1.0f };
 
 	std::vector<VkClearValue> clearValues(renderPass->GetAttachmentCount());
 	if (renderPass->activeColorAttachmentCount > 0)
@@ -921,10 +988,9 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 		clearValues[renderPass->activeColorAttachmentCount].depthStencil = { 0.0f, 0 };
 	}
 
-	g_CommandContext.BeginCommandBuffer(cmd);
-	g_CommandContext.BeginRenderPass(cmd, pipeline.renderPass->renderPass, framebuffers[imageIndex], viewportRect, clearValues);
+	g_CommandContext.BeginRenderPass(cmd, meshDrawPipeline.renderPass->renderPass, framebuffers[imageIndex], viewportRect, clearValues);
 
-	g_CommandContext.BindPipeline(cmd, pipeline);
+	g_CommandContext.BindPipeline(cmd, meshDrawPipeline);
 
 	// Set viewports & scissors
 	VkViewport dynamicViewport = GetViewport(viewportRect);
@@ -934,8 +1000,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 	// Descriptors
 
 	// Globals
-	auto viewUniformBufferParams = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
-	g_CommandContext.SetDescriptor(viewUniformBufferParams, 4, 0);
+	g_CommandContext.SetDescriptor(viewUniformBufferParams, DescriptorBindings::ViewUniformBuffer, 0);
 
 	// Meshes
 	const auto& vb = g_BufferMgr.vertexBuffer;
@@ -959,10 +1024,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 
 	// Indirect draws
 #if USE_MULTI_DRAW_INDIRECT
-	const auto& drawBuffer = g_BufferMgr.drawCommandBuffer;
-
-	auto drawBufferInfo = Niagara::DescriptorInfo(drawBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawBuffer.size));
-	g_CommandContext.SetDescriptor(drawBufferInfo, DescriptorBindings::MeshDrawBuffer);
+	g_CommandContext.SetDescriptor(drawBufferDescInfo, DescriptorBindings::MeshDrawBuffer);
 #endif // USE_MULTI_DRAW_INDIRECT
 
 #endif
@@ -979,7 +1041,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 #if USE_MESHLETS
 	
 #if USE_MULTI_DRAW_INDIRECT
-	vkCmdDrawMeshTasksIndirectNV(cmd, drawBuffer.buffer, offsetof(MeshDraw, drawMeshTaskIndirectCommand), drawBuffer.elementCount, sizeof(MeshDraw));
+	vkCmdDrawMeshTasksIndirectNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
 
 #else
 	uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
@@ -992,8 +1054,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 #if USE_MULTI_DRAW_INDIRECT
-		const auto& drawBuffer = g_BufferMgr.drawCommandBuffer;
-		vkCmdDrawIndexedIndirect(cmd, drawBuffer.buffer, offsetof(MeshDraw, drawIndexedIndirectCommand), drawBuffer.elementCount, sizeof(MeshDraw));
+		vkCmdDrawIndexedIndirect(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
 
 #else
 		vkCmdDrawIndexed(cmd, ib.elementCount, 1, 0, 0, 0);
@@ -1004,6 +1065,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, Niagara::GraphicsPipeline& pipelin
 #endif
 
 	g_CommandContext.EndRenderPass(cmd);
+
 	g_CommandContext.EndCommandBuffer(cmd);
 }
 
@@ -1102,13 +1164,13 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 
 /// Main
 
-void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex,
-	VkCommandBuffer cmd, Niagara::GraphicsPipeline &pipeline, VkQueue graphicsQueue,
+void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex, VkCommandBuffer cmd, VkQueue graphicsQueue,
 	std::vector<VkFramebuffer> &framebuffers, const Geometry &geometry, const VkRect2D &viewportRect)
 {
-	// Recording the command buffer
 	vkResetCommandBuffer(cmd, 0);
- 	RecordCommandBuffer(cmd, pipeline, framebuffers, imageIndex, geometry, viewportRect);
+
+	// Recording the command buffer
+ 	RecordCommandBuffer(cmd, framebuffers, imageIndex, geometry, viewportRect);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
@@ -1321,6 +1383,23 @@ bool LoadMesh(Geometry &result, const char* path, bool bBuildMeshlets = true, bo
 			mesh.vertexCount = static_cast<uint32_t>(vertexCount);
 			mesh.indexOffset = static_cast<uint32_t>(result.indices.size());
 			mesh.indexCount = static_cast<uint32_t>(indexCount);
+
+			// Bounding sphere
+			glm::vec3 center{0.0f};
+			for (const auto& vert : vertices)
+				center += vert.p;
+			center /= vertexCount;
+
+			float radius = 0.0f;
+			glm::vec3 tempVec{};
+			for (const auto& vert : vertices)
+			{
+				tempVec = vert.p - center;
+				radius = std::max(radius, glm::dot(tempVec, tempVec));
+			}
+			radius = sqrtf(radius);
+
+			mesh.boundingSphere = glm::vec4(center, radius);
 		}
 
 		// Vertices & indices
@@ -1564,7 +1643,7 @@ int main()
 	auto depthView = depthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
 
 #if 1
-	Niagara::RenderPass meshDrawPass{};
+	Niagara::RenderPass &meshDrawPass = g_PipelineMgr.meshDrawPass;
 	std::vector<Niagara::Attachment> colorAttachments{ Niagara::Attachment{swapchain.colorFormat} };
 	std::vector<Niagara::LoadStoreInfo> colorLoadStoreInfos{ Niagara::LoadStoreInfo{} };
 	Niagara::Attachment depthAttachment{ depthFormat };
@@ -1594,8 +1673,12 @@ int main()
 	}
 	
 	// Pipeline
-	Niagara::GraphicsPipeline pipeline;
+	Niagara::GraphicsPipeline &pipeline = g_PipelineMgr.meshDrawPipeline;
 	GetMeshDrawPipeline(device, pipeline, meshDrawPass, 0, { {0, 0}, renderExtent });
+
+	Niagara::ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
+	updateDrawArgsPipeline.computeShader.Load(device, "./CompiledShaders/DrawCommand.comp.spv");
+	updateDrawArgsPipeline.Init(device);
 
 	// Command buffers
 
@@ -1662,7 +1745,7 @@ int main()
 #if USE_MULTI_DRAW_INDIRECT
 	// Preparing indirect draw commands
 	const uint32_t DrawCount = DRAW_COUNT;
-	const float SceneRadius = 10.0f;
+	const float SceneRadius = SCENE_RADIUS;
 	std::vector<MeshDraw> meshDraws(DrawCount);
 	for (uint32_t i = 0; i < DrawCount; ++i)
 	{
@@ -1681,28 +1764,25 @@ int main()
 		draw.worldMatRow1 = glm::vec4(worldMat[0][1], worldMat[1][1], worldMat[2][1], worldMat[3][1]);
 		draw.worldMatRow2 = glm::vec4(worldMat[0][2], worldMat[1][2], worldMat[2][2], worldMat[3][2]);
 
-		// Draw command
+		// Draw command data
 		uint32_t meshId = glm::linearRand<uint32_t>(0, meshCount-1);
 		const Mesh& mesh = geometry.meshes[meshId];
 
+		draw.boundingSphere = mesh.boundingSphere;
+
+		draw.indexOffset = mesh.indexOffset;
+		draw.indexCount = mesh.indexCount;
 		draw.vertexOffset = mesh.vertexOffset;
 		draw.meshletOffset = mesh.meshletOffset;
 		draw.meshletCount = mesh.meshletCount;
-
-		memset(&draw.commandData, 0, sizeof(draw.commandData));
-
-		draw.drawIndexedIndirectCommand.indexCount = mesh.indexCount;
-		draw.drawIndexedIndirectCommand.firstIndex = mesh.indexOffset;
-		draw.drawIndexedIndirectCommand.vertexOffset = mesh.vertexOffset;
-		draw.drawIndexedIndirectCommand.instanceCount = 1;
-
-		uint32_t nTask = static_cast<uint32_t>(mesh.meshletCount);
-		draw.drawMeshTaskIndirectCommand.taskCount = Niagara::DivideAndRoundUp(nTask, 32);
 	}
 	// Indirect draw command buffer
-	GpuBuffer& drawBuffer = g_BufferMgr.drawCommandBuffer;
+	GpuBuffer& drawBuffer = g_BufferMgr.drawDataBuffer;
 	drawBuffer.Init(device, sizeof(MeshDraw), static_cast<uint32_t>(meshDraws.size()), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 		deviceLocalMemPropertyFlags, meshDraws.data());
+
+	GpuBuffer& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
+	drawArgsBuffer.Init(device, sizeof(MeshDrawCommand), DrawCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, deviceLocalMemPropertyFlags);
 #endif
 
 #if USE_MESHLETS
@@ -1781,7 +1861,12 @@ int main()
 		camera.UpdateAnim();
 
 		g_ViewUniformBufferParameters.viewProjMatrix = camera.GetViewProjMatrix();
+		g_ViewUniformBufferParameters.viewMatrix = camera.GetViewMatrix();
+		g_ViewUniformBufferParameters.projMatrix = camera.GetProjMatrix();
 		g_ViewUniformBufferParameters.camPos = camera.GetCamera().eye;
+		Niagara::GetFrustumPlanes(g_ViewUniformBufferParameters.frustumPlanes, camera.GetProjMatrix(), /*reversedZ = */ true);
+		// Max draw distance
+		g_ViewUniformBufferParameters.frustumPlanes[5] = glm::vec4(0, 0, -1, -MAX_DRAW_DISTANCE);
 		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters), 1);
 
 		// Get resources
@@ -1824,8 +1909,7 @@ int main()
 		}
 
 
-		Render(device, currentSyncObjects, imageIndex, currentCommandBuffer, 
-			pipeline, graphicsQueue, framebuffers, geometry, { {0, 0}, swapchain.extent});
+		Render(device, currentSyncObjects, imageIndex, currentCommandBuffer, graphicsQueue, framebuffers, geometry, { {0, 0}, swapchain.extent});
 
 		{
 			auto cmd = Niagara::BeginSingleTimeCommands();
@@ -1885,9 +1969,7 @@ int main()
 	g_CommandMgr.Cleanup(device);
 
 	// Pipeline
-	pipeline.Destroy(device);
-
-	meshDrawPass.Destroy(device);
+	g_PipelineMgr.Cleanup(device);
 
 	swapchain.Destroy(device);
 
