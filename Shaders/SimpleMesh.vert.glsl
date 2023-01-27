@@ -71,6 +71,20 @@ struct MeshDraw
     uint meshletCount;
 };
 
+struct MeshDrawCommand
+{
+    uint drawId;
+
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+
+    uint taskCount;
+    uint firstTask;
+};
+
 layout (std430, binding = 0) readonly buffer Vertices
 {
     Vertex vertices[];
@@ -79,6 +93,11 @@ layout (std430, binding = 0) readonly buffer Vertices
 layout (binding = 3) buffer Draws
 {
     MeshDraw draws[];
+};
+
+layout(binding = 4) buffer DrawCommands
+{
+    MeshDrawCommand drawCommands[];
 };
 
 #else // VERTEX_INPUT_MODE
@@ -107,7 +126,8 @@ void main()
     // => Access the buffer directly.
     // Vertex v = vertices[gl_VertexIndex];
 
-    MeshDraw meshDraw = draws[gl_DrawIDARB];
+    MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
+    MeshDraw meshDraw = draws[meshDrawCommand.drawId];
 
 #if !VERTEX_ALIGNMENT
     // NOT USED NOW

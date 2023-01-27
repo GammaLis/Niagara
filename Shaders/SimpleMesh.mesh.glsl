@@ -41,6 +41,11 @@ layout(binding = 3) buffer Draws
 	MeshDraw draws[];
 };
 
+layout(binding = 4) buffer DrawCommands
+{
+	MeshDrawCommand drawCommands[];
+};
+
 in taskNV block
 {
 	uint meshletIndices[GROUP_SIZE];
@@ -123,7 +128,9 @@ void main()
 	const uint meshletIndex = meshletIndices[gl_WorkGroupID.x];
 	const uint localThreadId = gl_LocalInvocationID.x;
 
-	const MeshDraw meshDraw = draws[gl_DrawIDARB];
+	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
+	const MeshDraw meshDraw = draws[meshDrawCommand.drawId];
+
 	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
 	const uint vertexCount = uint(meshlets[meshletIndex].vertexCount);

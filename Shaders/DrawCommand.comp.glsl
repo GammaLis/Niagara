@@ -3,6 +3,13 @@
 #extension GL_GOOGLE_include_directive	: require
 #include "MeshCommon.h"
 
+#define USE_SUBGROUP 1
+
+#if USE_SUBGROUP
+#extension GL_KHR_shader_subgroup_ballot	: require
+#endif
+
+
 #define GROUP_SIZE 32
 #define TASK_GROUP_SIZE 32
 
@@ -14,6 +21,11 @@ layout (binding = 0) readonly buffer Draws
 layout (binding = 1) writeonly buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
+};
+
+layout (binding = 2) buffer DrawCommandCount
+{
+	uint drawCommandCount;
 };
 
 bool FrustumCull(vec4 boundingSphere)
@@ -48,16 +60,40 @@ void main()
 	// Frustum cull
 	bool bVisible = FrustumCull(boundingSphere);
 
-	MeshDrawCommand drawCommand;
+#if USE_SUBGROUP
+	uvec4 ballot = subgroupBallot(bVisible);
+	uint visibleCount = subgroupBallotBitCount(ballot);
+	if (visibleCount == 0)
+		return;
 
-	drawCommand.indexCount = meshDraw.indexCount;
-    drawCommand.instanceCount = bVisible ? 1 : 0;
-    drawCommand.firstIndex = meshDraw.indexOffset;
-    drawCommand.vertexOffset = meshDraw.vertexOffset;
-    drawCommand.firstInstance = 0;
+	uint drawIndex = 0;
+	if (gl_SubgroupInvocationID == 0)
+	{
+		drawIndex = atomicAdd(drawCommandCount, visibleCount);	
+	}
+	drawIndex = subgroupBroadcastFirst(drawIndex);
+	uint subgroupIndex = subgroupBallotExclusiveBitCount(ballot);
+	drawIndex += subgroupIndex;
+#endif
 
-    drawCommand.taskCount = bVisible ? (meshDraw.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE : 0;
-    drawCommand.firstTask = 0;
+	if (bVisible)
+	{
+#if !USE_SUBGROUP
+		uint drawIndex = atomicAdd(drawCommandCount, 1);
+#endif
 
-    drawCommands[globalThreadId] = drawCommand;
+		MeshDrawCommand drawCommand;
+
+		drawCommand.drawId = globalThreadId;
+		drawCommand.indexCount = meshDraw.indexCount;
+	    drawCommand.instanceCount = 1;
+	    drawCommand.firstIndex = meshDraw.indexOffset;
+	    drawCommand.vertexOffset = meshDraw.vertexOffset;
+	    drawCommand.firstInstance = 0;
+
+	    drawCommand.taskCount = (meshDraw.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
+	    drawCommand.firstTask = 0;
+
+	    drawCommands[drawIndex] = drawCommand;
+	}	
 }

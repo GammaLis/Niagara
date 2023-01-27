@@ -23,6 +23,7 @@
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_XYZW_ONLY
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 
@@ -195,6 +196,8 @@ const std::vector<const char*> g_DeviceExtensions =
 	// VK_EXT_MESH_SHADER_EXTENSION_NAME
 #endif
 
+	VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
+
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -209,10 +212,11 @@ enum DescriptorBindings : uint32_t
 	MeshletBuffer		= 1,
 	MeshletDataBuffer	= 2,
 	MeshDrawBuffer		= 3,
+	MeshDrawArgsBuffer	= 4,
 
 	// TODO: put these another place
 	// Globals 
-	ViewUniformBuffer	= 4
+	ViewUniformBuffer	= 5
 };
 
 
@@ -354,6 +358,7 @@ struct alignas(16) MeshDraw
 
 struct MeshDrawCommand
 {
+	uint32_t drawId;
 	VkDrawIndexedIndirectCommand drawIndexedIndirectCommand; // 5 uint32_t
 	VkDrawMeshTasksIndirectCommandNV drawMeshTaskIndirectCommand; // 2 uint32_t
 };
@@ -473,6 +478,7 @@ struct BufferManager
 	GpuBuffer indexBuffer;
 	GpuBuffer drawDataBuffer;
 	GpuBuffer drawArgsBuffer;
+	GpuBuffer drawCountBuffer;
 
 #if USE_MESHLETS
 	GpuBuffer meshletBuffer;
@@ -491,6 +497,7 @@ struct BufferManager
 		indexBuffer.Destory(device);
 		drawDataBuffer.Destory(device);
 		drawArgsBuffer.Destory(device);
+		drawCountBuffer.Destory(device);
 
 #if USE_MESHLETS
 		meshletBuffer.Destory(device);
@@ -935,11 +942,23 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 	const auto& drawDataBuffer = g_BufferMgr.drawDataBuffer;
 	const auto& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
+	const auto& drawCountBuffer = g_BufferMgr.drawCountBuffer;
 
 	Niagara::DescriptorInfo drawBufferDescInfo(drawDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawDataBuffer.size));
 	Niagara::DescriptorInfo drawArgsDescInfo(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size));
 
 	uint32_t groupsX = 1, groupsY = 1, groupsZ = 1;
+
+	// Init indirect draw count
+	{
+		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(4), 0);
+
+		g_CommandContext.BufferBarrier(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(0),
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	}
+
 	// Updaet draw args
 	{
 		const uint32_t GroupSize = 32;
@@ -950,6 +969,10 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 		g_CommandContext.SetDescriptor(drawBufferDescInfo, 0);
 		g_CommandContext.SetDescriptor(drawArgsDescInfo, 1);
+		
+		Niagara::DescriptorInfo drawCountDescInfo(drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawCountBuffer.size));
+		g_CommandContext.SetDescriptor(drawCountDescInfo, 2);
+
 		g_CommandContext.SetDescriptor(viewUniformBufferParams, DescriptorBindings::ViewUniformBuffer);
 
 		g_CommandContext.PushDescriptorSetWithTemplate(cmd);
@@ -1025,6 +1048,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	// Indirect draws
 #if USE_MULTI_DRAW_INDIRECT
 	g_CommandContext.SetDescriptor(drawBufferDescInfo, DescriptorBindings::MeshDrawBuffer);
+	g_CommandContext.SetDescriptor(drawArgsDescInfo, DescriptorBindings::MeshDrawArgsBuffer);
 #endif // USE_MULTI_DRAW_INDIRECT
 
 #endif
@@ -1041,7 +1065,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 #if USE_MESHLETS
 	
 #if USE_MULTI_DRAW_INDIRECT
-	vkCmdDrawMeshTasksIndirectNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+	// vkCmdDrawMeshTasksIndirectNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+	vkCmdDrawMeshTasksIndirectCountNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
 
 #else
 	uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
@@ -1054,7 +1079,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 #if USE_MULTI_DRAW_INDIRECT
-		vkCmdDrawIndexedIndirect(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+		// vkCmdDrawIndexedIndirect(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+		vkCmdDrawIndexedIndirectCountKHR(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
 
 #else
 		vkCmdDrawIndexed(cmd, ib.elementCount, 1, 0, 0, 0);
@@ -1783,6 +1809,9 @@ int main()
 
 	GpuBuffer& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
 	drawArgsBuffer.Init(device, sizeof(MeshDrawCommand), DrawCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, deviceLocalMemPropertyFlags);
+
+	GpuBuffer& drawCountBuffer = g_BufferMgr.drawCountBuffer;
+	drawCountBuffer.Init(device, 4, 1, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 #endif
 
 #if USE_MESHLETS
