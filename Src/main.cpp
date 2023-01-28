@@ -58,9 +58,12 @@ constexpr uint32_t HEIGHT = 600;
 constexpr uint32_t MESHLET_MAX_VERTICES = 64;
 constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
 
+constexpr uint32_t MESH_MAX_LODS = 8;
+
+constexpr uint32_t TASK_GROUP_SIZE = 32;
 constexpr uint32_t DRAW_COUNT = 100;
 constexpr float SCENE_RADIUS = 10.0f;
-constexpr float MAX_DRAW_DISTANCE = 8.0f;
+constexpr float MAX_DRAW_DISTANCE = 10.0f;
 
 const std::string g_ResourcePath = "../Resources/";
 
@@ -197,7 +200,6 @@ const std::vector<const char*> g_DeviceExtensions =
 #endif
 
 	VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
-
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -209,14 +211,15 @@ std::vector<VkDynamicState> g_DynamicStates =
 enum DescriptorBindings : uint32_t
 {
 	VertexBuffer		= 0,
-	MeshletBuffer		= 1,
-	MeshletDataBuffer	= 2,
-	MeshDrawBuffer		= 3,
-	MeshDrawArgsBuffer	= 4,
+	MeshBuffer			= 1,
+	MeshDrawBuffer		= 2,
+	MeshDrawArgsBuffer	= 3,
+	MeshletBuffer		= 4,
+	MeshletDataBuffer	= 5,
 
 	// TODO: put these another place
 	// Globals 
-	ViewUniformBuffer	= 5
+	ViewUniformBuffer	= 6
 };
 
 
@@ -320,15 +323,23 @@ struct alignas(16) Meshlet
 	uint8_t triangleCount = 0;
 };
 
-struct alignas(16) Mesh
+struct MeshLod
 {
-	glm::vec4 boundingSphere;
-	uint32_t vertexOffset;
-	uint32_t vertexCount;
 	uint32_t indexOffset;
 	uint32_t indexCount;
 	uint32_t meshletOffset;
 	uint32_t meshletCount;
+};
+
+struct alignas(16) Mesh
+{
+	glm::vec4 boundingSphere;
+
+	uint32_t vertexOffset;
+	uint32_t vertexCount;
+	
+	uint32_t lodCount;
+	MeshLod lods[MESH_MAX_LODS];
 };
 
 struct Geometry
@@ -347,13 +358,8 @@ struct alignas(16) MeshDraw
 	glm::vec4 worldMatRow1;
 	glm::vec4 worldMatRow2;
 	
-	glm::vec4 boundingSphere;
-
-	uint32_t indexOffset;
-	uint32_t indexCount;
-	int32_t  vertexOffset;
-	uint32_t meshletOffset;
-	uint32_t meshletCount;
+	int32_t  vertexOffset; // == meshes[meshIndex].vertexOffset, helps data locality in mesh shader
+	uint32_t meshIndex;
 };
 
 struct MeshDrawCommand
@@ -476,6 +482,7 @@ struct BufferManager
 	// Storage buffers
 	GpuBuffer vertexBuffer;
 	GpuBuffer indexBuffer;
+	GpuBuffer meshBuffer;
 	GpuBuffer drawDataBuffer;
 	GpuBuffer drawArgsBuffer;
 	GpuBuffer drawCountBuffer;
@@ -495,6 +502,7 @@ struct BufferManager
 		// Storage buffers
 		vertexBuffer.Destory(device);
 		indexBuffer.Destory(device);
+		meshBuffer.Destory(device);
 		drawDataBuffer.Destory(device);
 		drawArgsBuffer.Destory(device);
 		drawCountBuffer.Destory(device);
@@ -940,10 +948,12 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	// Globals
 	auto viewUniformBufferParams = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
 
+	const auto& meshBuffer = g_BufferMgr.meshBuffer;
 	const auto& drawDataBuffer = g_BufferMgr.drawDataBuffer;
 	const auto& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
 	const auto& drawCountBuffer = g_BufferMgr.drawCountBuffer;
 
+	Niagara::DescriptorInfo meshBufferDescInfo(meshBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshBuffer.size));
 	Niagara::DescriptorInfo drawBufferDescInfo(drawDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawDataBuffer.size));
 	Niagara::DescriptorInfo drawArgsDescInfo(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size));
 
@@ -967,13 +977,14 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 		g_CommandContext.BindPipeline(cmd, updateDrawArgsPipeline);
 
-		g_CommandContext.SetDescriptor(drawBufferDescInfo, 0);
-		g_CommandContext.SetDescriptor(drawArgsDescInfo, 1);
+		g_CommandContext.SetDescriptor(0, meshBufferDescInfo);
+		g_CommandContext.SetDescriptor(1, drawBufferDescInfo);
+		g_CommandContext.SetDescriptor(2, drawArgsDescInfo);
 		
 		Niagara::DescriptorInfo drawCountDescInfo(drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawCountBuffer.size));
-		g_CommandContext.SetDescriptor(drawCountDescInfo, 2);
+		g_CommandContext.SetDescriptor(3, drawCountDescInfo);
 
-		g_CommandContext.SetDescriptor(viewUniformBufferParams, DescriptorBindings::ViewUniformBuffer);
+		g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferParams);
 
 		g_CommandContext.PushDescriptorSetWithTemplate(cmd);
 
@@ -1023,7 +1034,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	// Descriptors
 
 	// Globals
-	g_CommandContext.SetDescriptor(viewUniformBufferParams, DescriptorBindings::ViewUniformBuffer, 0);
+	g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferParams, 0);
 
 	// Meshes
 	const auto& vb = g_BufferMgr.vertexBuffer;
@@ -1031,24 +1042,26 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 #if VERTEX_INPUT_MODE == 1
 	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size));
-	g_CommandContext.SetDescriptor(vbInfo, DescriptorBindings::VertexBuffer);
+	g_CommandContext.SetDescriptor(DescriptorBindings::VertexBuffer, vbInfo);
 
 #if USE_MESHLETS
 	const auto& mb = g_BufferMgr.meshletBuffer;
 	const auto& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
 
+	g_CommandContext.SetDescriptor(DescriptorBindings::MeshBuffer, meshBufferDescInfo);
+
 	auto mbInfo = Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size));
-	g_CommandContext.SetDescriptor(mbInfo, DescriptorBindings::MeshletBuffer);
+	g_CommandContext.SetDescriptor(DescriptorBindings::MeshletBuffer, mbInfo);
 
 	auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshletDataBuffer.size));
-	g_CommandContext.SetDescriptor(meshletDataInfo, DescriptorBindings::MeshletDataBuffer);
+	g_CommandContext.SetDescriptor(DescriptorBindings::MeshletDataBuffer, meshletDataInfo);
 
 #endif
 
 	// Indirect draws
 #if USE_MULTI_DRAW_INDIRECT
-	g_CommandContext.SetDescriptor(drawBufferDescInfo, DescriptorBindings::MeshDrawBuffer);
-	g_CommandContext.SetDescriptor(drawArgsDescInfo, DescriptorBindings::MeshDrawArgsBuffer);
+	g_CommandContext.SetDescriptor(DescriptorBindings::MeshDrawBuffer, drawBufferDescInfo);
+	g_CommandContext.SetDescriptor(DescriptorBindings::MeshDrawArgsBuffer, drawArgsDescInfo);
 #endif // USE_MULTI_DRAW_INDIRECT
 
 #endif
@@ -1362,6 +1375,14 @@ size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, c
 		meshletDataOffset += indexGroupCount;
 	}
 
+	// Padding
+	if (meshletCount % TASK_GROUP_SIZE != 0)
+	{
+		size_t paddingCount = TASK_GROUP_SIZE - meshletCount % TASK_GROUP_SIZE;
+		result.meshlets.insert(result.meshlets.end(), paddingCount, {});
+		meshletCount += paddingCount;
+	}
+
 	return meshletCount;
 }
 
@@ -1405,13 +1426,13 @@ bool LoadMesh(Geometry &result, const char* path, bool bBuildMeshlets = true, bo
 		result.meshes.push_back({});
 		auto& mesh = result.meshes.back();
 		{
+			// Vertices
 			mesh.vertexOffset = static_cast<uint32_t>(result.vertices.size());
 			mesh.vertexCount = static_cast<uint32_t>(vertexCount);
-			mesh.indexOffset = static_cast<uint32_t>(result.indices.size());
-			mesh.indexCount = static_cast<uint32_t>(indexCount);
+			result.vertices.insert(result.vertices.end(), vertices.begin(), vertices.end());
 
 			// Bounding sphere
-			glm::vec3 center{0.0f};
+			glm::vec3 center{ 0.0f };
 			for (const auto& vert : vertices)
 				center += vert.p;
 			center /= vertexCount;
@@ -1426,18 +1447,37 @@ bool LoadMesh(Geometry &result, const char* path, bool bBuildMeshlets = true, bo
 			radius = sqrtf(radius);
 
 			mesh.boundingSphere = glm::vec4(center, radius);
-		}
+			
+			// Lods
+			size_t lodIndexCount = indexCount;
+			std::vector<uint32_t> lodIndices = indices;
+			while (mesh.lodCount < MESH_MAX_LODS)
+			{
+				auto& meshLod = mesh.lods[mesh.lodCount++];
 
-		// Vertices & indices
-		{
-			result.vertices.insert(result.vertices.end(), vertices.begin(), vertices.end());
-			result.indices.insert(result.indices.end(), indices.begin(), indices.end());
-		}
+				// Indices
+				meshLod.indexOffset = static_cast<uint32_t>(result.indices.size());
+				meshLod.indexCount = static_cast<uint32_t>(lodIndexCount);
 
-		// Meshlets
-		{
-			mesh.meshletOffset = static_cast<uint32_t>(result.meshlets.size());
-			mesh.meshletCount = bBuildMeshlets ? static_cast<uint32_t>(BuildOptMeshlets(result, vertices, indices)) : 0;
+				result.indices.insert(result.indices.end(), lodIndices.begin(), lodIndices.end());
+
+				// Meshlets
+				meshLod.meshletOffset = static_cast<uint32_t>(result.meshlets.size());
+				meshLod.meshletCount = bBuildMeshlets ? static_cast<uint32_t>(BuildOptMeshlets(result, vertices, lodIndices)) : 0;
+
+				// Simplify
+				size_t nextTargetIndexCount = size_t(double(lodIndexCount * 0.5f)); // 0.75, 0.5
+				size_t nextIndexCount = meshopt_simplify(lodIndices.data(), lodIndices.data(), lodIndexCount, &vertices[0].p.x, vertexCount, sizeof(Vertex), nextTargetIndexCount, 1e-2f);
+				assert(nextIndexCount <= lodIndexCount);
+
+				// We've reched the error bound
+				if (nextIndexCount == lodIndexCount)
+					break;
+
+				lodIndexCount = nextIndexCount;
+				lodIndices.resize(lodIndexCount);
+				meshopt_optimizeVertexCache(lodIndices.data(), lodIndices.data(), lodIndexCount, vertexCount);
+			}
 		}
 	}
 
@@ -1767,6 +1807,9 @@ int main()
 		ib.Init(device, sizeof(uint32_t), static_cast<uint32_t>(geometry.indices.size()), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.indices.data());
 	}
 
+	GpuBuffer& meshBuffer = g_BufferMgr.meshBuffer;
+	meshBuffer.Init(device, sizeof(Mesh), static_cast<uint32_t>(geometry.meshes.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshes.data());
+
 	// Indirect draw command buffers
 #if USE_MULTI_DRAW_INDIRECT
 	// Preparing indirect draw commands
@@ -1794,13 +1837,8 @@ int main()
 		uint32_t meshId = glm::linearRand<uint32_t>(0, meshCount-1);
 		const Mesh& mesh = geometry.meshes[meshId];
 
-		draw.boundingSphere = mesh.boundingSphere;
-
-		draw.indexOffset = mesh.indexOffset;
-		draw.indexCount = mesh.indexCount;
+		draw.meshIndex = meshId;
 		draw.vertexOffset = mesh.vertexOffset;
-		draw.meshletOffset = mesh.meshletOffset;
-		draw.meshletCount = mesh.meshletCount;
 	}
 	// Indirect draw command buffer
 	GpuBuffer& drawBuffer = g_BufferMgr.drawDataBuffer;

@@ -15,10 +15,14 @@
 
 #define MAX_VERTICES 64
 #define MAX_PRIMITIVES 84
+#define MAX_LODS 8
 
 #define DESC_VERTEX_BUFFER 0
-#define DESC_MESHLET_BUFFER 1
-#define DESC_MESHLET_DATA_BUFFER 2
+#define DESC_MESH_BUFFER 1
+#define DESC_DRAW_DATA_BUFFER 2
+#define DESC_DRAW_COMMAND_BUFFER 3
+#define DESC_MESHLET_BUFFER 4
+#define DESC_MESHLET_DATA_BUFFER 5
 
 
 struct Vertex
@@ -45,19 +49,31 @@ struct Meshlet
 	uint8_t triangleCount;
 };
 
+struct MeshLod
+{
+	uint indexOffset;
+	uint indexCount;
+	uint meshletOffset;
+	uint meshletCount;
+};
+
+struct Mesh
+{
+	vec4 boundingSphere;
+	int  vertexOffset;
+	uint vertexCount;
+	uint lodCount;
+	MeshLod lods[MAX_LODS];
+};
+
 struct MeshDraw
 {
 	vec4 worldMatRow0;
 	vec4 worldMatRow1;
 	vec4 worldMatRow2;
 
-	vec4 boundingSphere;
-
-	uint indexOffset;
-	uint indexCount;
-	int  vertexOffset;
-	uint meshletOffset;
-	uint meshletCount;
+	int  vertexOffset;	
+	uint meshIndex;
 };
 
 struct MeshDrawCommand

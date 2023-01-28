@@ -1,7 +1,7 @@
 #ifndef COMMON_INCLUDED
 #define COMMON_INCLUDED
 
-layout (set = 0, binding = 5) uniform ViewUniformBufferParameters
+layout (set = 0, binding = 6) uniform ViewUniformBufferParameters
 {
     mat4 viewProjMatrix;
     mat4 viewMatrix;

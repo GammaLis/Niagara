@@ -21,29 +21,29 @@
 
 #define DEBUG 0
 
-layout (std430, binding = 0) buffer Vertices
+layout (std430, binding = DESC_VERTEX_BUFFER) buffer Vertices
 {
 	Vertex vertices[];
 };
 
-layout (std430, binding = 1) buffer Meshlets
-{
-	Meshlet meshlets[];
-};
-
-layout (binding = 2) buffer MeshletData
-{
-	uint meshletData[];
-};
-
-layout(binding = 3) buffer Draws
+layout (std430, binding = DESC_DRAW_DATA_BUFFER) buffer Draws
 {
 	MeshDraw draws[];
 };
 
-layout(binding = 4) buffer DrawCommands
+layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
+};
+
+layout (std430, binding = DESC_MESHLET_BUFFER) buffer Meshlets
+{
+	Meshlet meshlets[];
+};
+
+layout (std430, binding = DESC_MESHLET_DATA_BUFFER) buffer MeshletData
+{
+	uint meshletData[];
 };
 
 in taskNV block

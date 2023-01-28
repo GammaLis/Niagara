@@ -25,6 +25,8 @@ layout (binding = 0) uniform ObjectUniformBuffer
 };
 #endif
 
+#define MAX_LODS 8
+
 
 #if VERTEX_INPUT_MODE == 1
 struct Vertex
@@ -56,19 +58,30 @@ struct Vertex
 #endif
 };
 
+struct MeshLod
+{
+    uint indexOffset;
+    uint indexCount;
+    uint meshletOffset;
+    uint meshletCount;
+};
+
+struct Mesh
+{
+    vec4 boundingSphere;
+    int  vertexOffset;
+    uint lodCount;
+    MeshLod lods[MAX_LODS];
+};
+
 struct MeshDraw
 {
     vec4 worldMatRow0;
     vec4 worldMatRow1;
     vec4 worldMatRow2;
 
-    vec4 boundingSphere;
-
-    uint indexOffset;
-    uint indexCount;
-    int  vertexOffset;
-    uint meshletOffset;
-    uint meshletCount;
+    uint meshIndex;
+    int  vertexOffset;  
 };
 
 struct MeshDrawCommand
@@ -90,12 +103,12 @@ layout (std430, binding = 0) readonly buffer Vertices
     Vertex vertices[];
 };
 
-layout (binding = 3) buffer Draws
+layout (std430, binding = 2) buffer Draws
 {
     MeshDraw draws[];
 };
 
-layout(binding = 4) buffer DrawCommands
+layout (std430, binding = 3) buffer DrawCommands
 {
     MeshDrawCommand drawCommands[];
 };

@@ -90,7 +90,7 @@ namespace Niagara
 
 		void BindPipeline(VkCommandBuffer cmd, const ComputePipeline& pipeline);
 
-		void SetDescriptor(const DescriptorInfo& info, uint32_t binding, uint32_t set = 0)
+		void SetDescriptor(uint32_t binding, const DescriptorInfo& info, uint32_t set = 0)
 		{
 			assert(descriptorSetInfos[set].mask & (1 << binding));
 			// TODO:
@@ -98,14 +98,14 @@ namespace Niagara
 			cachedDescriptorInfos[set][binding] = info;
 		}
 
-		void SetDescriptor(const VkWriteDescriptorSet& descriptor, uint32_t binding, uint32_t set = 0)
+		void SetDescriptor(uint32_t binding, const VkWriteDescriptorSet& descriptor, uint32_t set = 0)
 		{
 			assert(descriptorSetInfos[set].mask & (1 << binding));
 
 			cachedWriteDescriptorSets[set][binding] = descriptor;
 		}
 
-		void SetWriteDescriptor(const DescriptorInfo& info, uint32_t binding, uint32_t set = 0)
+		void SetWriteDescriptor(uint32_t binding, const DescriptorInfo& info, uint32_t set = 0)
 		{
 			assert(descriptorSetInfos[set].mask & (1 << binding));
 

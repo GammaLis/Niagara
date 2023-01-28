@@ -22,24 +22,29 @@
 #define DEBUG 0
 #define CULL 1
 
-layout (std430, binding = 0) buffer Vertices
+layout (std430, binding = DESC_VERTEX_BUFFER) buffer Vertices
 {
 	Vertex vertices[];
 };
 
-layout (std430, binding = 1) buffer Meshlets
+layout (std430, binding = DESC_MESH_BUFFER) buffer Meshes
 {
-	Meshlet meshlets[];
+	Mesh meshes[];
 };
 
-layout(std430, binding = 3) buffer Draws
+layout (std430, binding = DESC_DRAW_DATA_BUFFER) buffer Draws
 {
 	MeshDraw draws[];
 };
 
-layout(std430, binding = 4) buffer DrawCommands
+layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
+};
+
+layout (std430, binding = DESC_MESHLET_BUFFER) buffer Meshlets
+{
+	Meshlet meshlets[];
 };
 
 out taskNV block 
@@ -101,7 +106,8 @@ void main()
 
 	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
 	const MeshDraw meshDraw = draws[meshDrawCommand.drawId];
-	const uint meshletIndex = localThreadIdStart + localThreadId + meshDraw.meshletOffset;
+	
+	const uint meshletIndex = localThreadIdStart + localThreadId;
 
 	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
@@ -113,7 +119,7 @@ void main()
 
 	bool accept = false;
 
-	if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset) 
+	// if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	{
 		vec4 cone = meshlets[meshletIndex].cone;
 		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
@@ -150,7 +156,7 @@ void main()
 	// Sync
 	memoryBarrierShared();
 
-	if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
+	// if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	{
 		vec4 cone = meshlets[meshletIndex].cone;
 		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
@@ -170,9 +176,8 @@ void main()
 #endif
 
 #else
-	if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	meshletIndices[localThreadId] = meshletIndex;
 	if (localThreadId == 0)
-		gl_TaskCountNV = min(GROUP_SIZE, meshDraw.meshletCount - localThreadIdStart);
+		gl_TaskCountNV = GROUP_SIZE;
 #endif
 }
