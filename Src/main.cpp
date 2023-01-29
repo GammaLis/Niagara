@@ -450,11 +450,11 @@ struct GpuBuffer
 
 			Copy(device, *this, scratchBuffer, size);
 
-			scratchBuffer.Destory(device);
+			scratchBuffer.Destroy(device);
 		}
 	}	
 
-	void Destory(const Niagara::Device &device)
+	void Destroy(const Niagara::Device &device)
 	{
 		if (memory != VK_NULL_HANDLE)
 			vkFreeMemory(device, memory, nullptr);
@@ -497,19 +497,19 @@ struct BufferManager
 	void Cleanup(const Niagara::Device &device)
 	{
 		// Uniform buffers
-		viewUniformBuffer.Destory(device);
+		viewUniformBuffer.Destroy(device);
 
 		// Storage buffers
-		vertexBuffer.Destory(device);
-		indexBuffer.Destory(device);
-		meshBuffer.Destory(device);
-		drawDataBuffer.Destory(device);
-		drawArgsBuffer.Destory(device);
-		drawCountBuffer.Destory(device);
+		vertexBuffer.Destroy(device);
+		indexBuffer.Destroy(device);
+		meshBuffer.Destroy(device);
+		drawDataBuffer.Destroy(device);
+		drawArgsBuffer.Destroy(device);
+		drawCountBuffer.Destroy(device);
 
 #if USE_MESHLETS
-		meshletBuffer.Destory(device);
-		meshletDataBuffer.Destory(device);
+		meshletBuffer.Destroy(device);
+		meshletDataBuffer.Destroy(device);
 #endif
 
 		DepthTexture.Destroy(device);
@@ -969,7 +969,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	}
 
-	// Updaet draw args
+	// Update draw args
 	{
 		const uint32_t GroupSize = 32;
 
@@ -997,7 +997,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
 	}
 
-	// Mesh draw pipeine
+	// Mesh draw pipeline
 
 	auto& meshDrawPipeline = g_PipelineMgr.meshDrawPipeline;
 

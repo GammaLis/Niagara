@@ -186,7 +186,7 @@ namespace Niagara
 		return barrier;
 	}
 
-	// Create an image memory barrier for chaing the layout of an image and put it into an active command buffer
+	// Create an image memory barrier for changing the layout of an image and put it into an active command buffer
 	void SetImageLayout(VkCommandBuffer cmd, VkImage image, VkImageSubresourceRange subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask)
 	{
 		VkImageMemoryBarrier barrier{};

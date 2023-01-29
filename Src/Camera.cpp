@@ -325,7 +325,7 @@ namespace Niagara
 		// Adjust speed based on distance
 		if (m_Mode == Modes::Examine)
 		{
-			// Don't move over the point of intereset
+			// Don't move over the point of interest
 			if (factor >= 1.0f)
 				return;
 
@@ -346,7 +346,7 @@ namespace Niagara
 
 		m_Current.eye += z;
 
-		// In fly mode, the interset moves with us
+		// In fly mode, the interest moves with us
 		if (m_Mode == Modes::Examine)
 			m_Current.center += z;
 	}

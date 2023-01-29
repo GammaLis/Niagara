@@ -92,8 +92,9 @@ void main()
 		float lodDistance = log2(max(1, (distance(boundingSphere.xyz, vec3(0.0f)) - boundingSphere.w)));
 		uint lodIndex = clamp(int(lodDistance), 0, int(mesh.lodCount) - 1);
 
-		// MeshLod meshLod = mesh.lods[lodIndex];
-		MeshLod meshLod = mesh.lods[mesh.lodCount-1];
+		MeshLod meshLod = mesh.lods[lodIndex];
+		// DEBUG::
+		// MeshLod meshLod = mesh.lods[mesh.lodCount-1];
 		
 		MeshDrawCommand drawCommand;
 

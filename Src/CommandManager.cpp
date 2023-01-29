@@ -75,7 +75,7 @@ namespace Niagara
 		region.bufferOffset = 0;
 		// The `bufferRowLength` and `bufferImageHeight` fields specify how the pixels are laid out in memory. For example,
 		// you could have some padding bytes between rows of the image. Specifying `0` for both indicates that the pixels 
-		// are simply tightly pakced.
+		// are simply tightly packed.
 		region.bufferRowLength = 0;
 		region.bufferImageHeight = 0;
 		region.imageSubresource.aspectMask = aspectFlags;
