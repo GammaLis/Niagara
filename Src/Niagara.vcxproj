@@ -218,6 +218,9 @@
     <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
+    <CustomBuild Include="..\Shaders\HiZBuild.comp.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
     <None Include="..\Shaders\MeshCommon.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="CommandManager.h" />

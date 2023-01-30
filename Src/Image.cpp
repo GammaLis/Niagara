@@ -37,7 +37,46 @@ namespace Niagara
 	void ImageView::Destroy(const Device &device)
 	{
 		if (view != VK_NULL_HANDLE)
+		{
 			vkDestroyImageView(device, view, nullptr);
+			view = VK_NULL_HANDLE;
+		}
+	}
+
+
+	/// Sampler
+
+	void Sampler::Init(const Device& device, VkFilter filter, VkSamplerMipmapMode mipmapMode, VkSamplerAddressMode addressMode, float maxAnisotropy, VkCompareOp compareOp)
+	{
+		Destroy(device);
+
+		VkSamplerCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		createInfo.magFilter = filter;
+		createInfo.minFilter = filter;
+		createInfo.mipmapMode = mipmapMode;
+		createInfo.addressModeU = addressMode;
+		createInfo.addressModeV = addressMode;
+		createInfo.addressModeW = addressMode;
+		createInfo.mipLodBias = 0;
+		createInfo.anisotropyEnable = maxAnisotropy > 0 ? VK_TRUE : VK_FALSE;
+		createInfo.maxAnisotropy = maxAnisotropy;
+		createInfo.compareEnable = compareOp != VK_COMPARE_OP_NEVER ? VK_TRUE : VK_FALSE;
+		createInfo.compareOp = compareOp;
+		createInfo.minLod = 0.0f;
+		createInfo.maxLod = 16.0f;
+
+		VK_CHECK(vkCreateSampler(device, &createInfo, nullptr, &sampler));
+		assert(sampler);
+	}
+
+	void Sampler::Destroy(const Device& device)
+	{
+		if (sampler != VK_NULL_HANDLE)
+		{
+			vkDestroySampler(device, sampler, nullptr);
+			sampler = VK_NULL_HANDLE;
+		}
 	}
 
 
@@ -89,6 +128,7 @@ namespace Niagara
 		Destroy(device);
 
 		this->type = GetImageType(extent);
+		this->extent = extent;
 		this->format = format;
 		this->sampleCount = sampleCount;
 		this->usage = imageUsage;
@@ -141,6 +181,14 @@ namespace Niagara
 
 	void Image::Destroy(const Device& device)
 	{
+		if (!views.empty())
+		{
+			for (auto& view : views)
+				view.Destroy(device);
+
+			views.clear();
+		}
+
 		if (memory != VK_NULL_HANDLE)
 		{
 			// Unmap(device);
@@ -148,14 +196,6 @@ namespace Niagara
 		}
 		if (image != VK_NULL_HANDLE)
 			vkDestroyImage(device, image, nullptr);
-
-		if (!views.empty())
-		{
-			for (auto &view : views)
-				view.Destroy(device);
-
-			views.clear();
-		}
 	}
 
 	const ImageView& Image::CreateImageView(const Device &device, VkImageViewType viewType, uint32_t baseMipLevel, uint32_t baseArrayLayer, uint32_t mipLevels, uint32_t arrayLayers)

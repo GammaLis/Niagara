@@ -43,7 +43,7 @@
 
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
-#define USE_MESHLETS 1
+#define USE_MESHLETS 0
 #define USE_MULTI_DRAW_INDIRECT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
@@ -66,10 +66,11 @@ constexpr float SCENE_RADIUS = 10.0f;
 constexpr float MAX_DRAW_DISTANCE = 10.0f;
 
 const std::string g_ResourcePath = "../Resources/";
+VkExtent2D g_ViewportSize{};
 
 GLFWwindow* g_Window = nullptr;
 bool g_FramebufferResized = false;
-double g_DeltaTime = 0.0f;
+double g_DeltaTime = 0.0;
 
 // Window callbacks
 void FramebufferResizeCallback(GLFWwindow *window, int width, int height)
@@ -165,6 +166,32 @@ VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
 VkDevice g_Device = VK_NULL_HANDLE;
 
 VkCommandPool g_CommandPool = VK_NULL_HANDLE;
+
+// Samplers
+struct CommonStates
+{
+	Niagara::Sampler linearClampSampler;
+	Niagara::Sampler linearRepeatSampler;
+	Niagara::Sampler pointClampSampler;
+	Niagara::Sampler pointRepeatSampler;
+
+	void Init(const Niagara::Device &device)
+	{
+		linearClampSampler.Init(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
+		linearRepeatSampler.Init(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+		pointClampSampler.Init(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
+		pointRepeatSampler.Init(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+	}
+
+	void Destroy(const Niagara::Device &device)
+	{
+		linearClampSampler.Destroy(device);
+		linearRepeatSampler.Destroy(device);
+		pointClampSampler.Destroy(device);
+		pointRepeatSampler.Destroy(device);
+	}
+};
+CommonStates g_CommonStates;
 
 using Niagara::g_CommandMgr;
 using Niagara::g_CommandContext;
@@ -493,6 +520,7 @@ struct BufferManager
 #endif
 
 	Niagara::Image DepthTexture;
+	Niagara::Image DepthPyramid;
 
 	void Cleanup(const Niagara::Device &device)
 	{
@@ -513,6 +541,7 @@ struct BufferManager
 #endif
 
 		DepthTexture.Destroy(device);
+		DepthPyramid.Destroy(device);
 	}
 };
 BufferManager g_BufferMgr{};
@@ -523,11 +552,13 @@ struct PipelineManager
 	Niagara::GraphicsPipeline meshDrawPipeline;
 	
 	Niagara::ComputePipeline updateDrawArgsPipeline;
+	Niagara::ComputePipeline buildDepthPyramidPipeline;
 
 	void Cleanup(const Niagara::Device &device)
 	{
 		meshDrawPipeline.Destroy(device);
 		updateDrawArgsPipeline.Destroy(device);
+		buildDepthPyramidPipeline.Destroy(device);
 
 		meshDrawPass.Destroy(device);
 	}
@@ -973,9 +1004,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	{
 		const uint32_t GroupSize = 32;
 
-		auto& updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
-
-		g_CommandContext.BindPipeline(cmd, updateDrawArgsPipeline);
+		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.updateDrawArgsPipeline);
 
 		g_CommandContext.SetDescriptor(0, meshBufferDescInfo);
 		g_CommandContext.SetDescriptor(1, drawBufferDescInfo);
@@ -998,6 +1027,11 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	}
 
 	// Mesh draw pipeline
+
+	// Set viewports & scissors
+	VkViewport dynamicViewport = GetViewport(viewportRect);
+	vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
+	vkCmdSetScissor(cmd, 0, 1, &viewportRect);
 
 	auto& meshDrawPipeline = g_PipelineMgr.meshDrawPipeline;
 
@@ -1025,11 +1059,6 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	g_CommandContext.BeginRenderPass(cmd, meshDrawPipeline.renderPass->renderPass, framebuffers[imageIndex], viewportRect, clearValues);
 
 	g_CommandContext.BindPipeline(cmd, meshDrawPipeline);
-
-	// Set viewports & scissors
-	VkViewport dynamicViewport = GetViewport(viewportRect);
-	vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
-	vkCmdSetScissor(cmd, 0, 1, &viewportRect);
 
 	// Descriptors
 
@@ -1104,6 +1133,83 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 #endif
 
 	g_CommandContext.EndRenderPass(cmd);
+
+#if 1
+	// Generate depth pyramid
+	{
+		const auto& depthTexture = g_BufferMgr.DepthTexture;
+		const auto& depthPyramid = g_BufferMgr.DepthPyramid;
+		
+		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.buildDepthPyramidPipeline);
+
+		g_CommandContext.ImageBarrier(depthTexture.image, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+		VkImageSubresourceRange subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VkImageView srcImageView = VK_NULL_HANDLE;
+		uint32_t w = depthPyramid.extent.width, h = depthPyramid.extent.height;
+		const uint32_t GroupSize = 8;
+
+		struct Constants
+		{
+			glm::vec4 srcSize;
+			glm::vec2 viewportMaxBoundUV;
+		} constants{};
+
+		for (uint32_t i = 0; i < depthPyramid.subresource.mipLevel; ++i)
+		{
+			constants.viewportMaxBoundUV = glm::vec2(1.0f, 1.0f);
+
+			VkImageLayout srcLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+			if (i == 0)
+			{
+				srcImageView = depthTexture.views[0].view;
+
+				srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+				constants.srcSize = Niagara::GetSizeAndInvSize(depthTexture.extent.width, depthTexture.extent.height);
+
+				g_CommandContext.ImageBarrier(depthPyramid.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT);
+
+				g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+			}
+			else
+			{
+				srcImageView = depthPyramid.views[i-1].view;
+
+				srcLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+				constants.srcSize = Niagara::GetSizeAndInvSize(w, h);
+
+				subresourceRange.baseMipLevel = i-1;
+				g_CommandContext.ImageBarrier(depthPyramid.image, subresourceRange, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+				subresourceRange.baseMipLevel = i;
+				g_CommandContext.ImageBarrier(depthPyramid.image, subresourceRange, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT);
+
+				g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+			}
+
+			g_CommandContext.PushConstants(cmd, "_Constants", 0, sizeof(constants), &constants);
+
+			g_CommandContext.SetDescriptor(0, Niagara::DescriptorInfo(g_CommonStates.linearClampSampler.sampler, srcImageView, srcLayout));
+			g_CommandContext.SetDescriptor(1, Niagara::DescriptorInfo(VK_NULL_HANDLE, depthPyramid.views[i].view, VK_IMAGE_LAYOUT_GENERAL));
+
+			g_CommandContext.PushDescriptorSetWithTemplate(cmd, 0);
+
+			groupsX = Niagara::DivideAndRoundUp(w, GroupSize);
+			groupsY = Niagara::DivideAndRoundUp(h, GroupSize);
+			vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
+
+			w = std::max(1u, w >> 1);
+			h = std::max(1u, h >> 1);
+		}
+		
+	}
+
+#endif
 
 	g_CommandContext.EndCommandBuffer(cmd);
 }
@@ -1689,9 +1795,14 @@ int main()
 	Niagara::Swapchain swapchain{};
 	swapchain.Init(instance, device, window);
 
+	g_ViewportSize = swapchain.extent;
+
 	auto renderExtent = swapchain.extent;
 
 	g_CommandMgr.Init(device);
+
+	// Common states
+	g_CommonStates.Init(device);	
 
 	// Retrieving queue handles
 	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
@@ -1707,6 +1818,20 @@ int main()
 		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
 		0);
 	auto depthView = depthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+
+	// Depth pyramid
+	glm::uvec2 hzbSize;
+	hzbSize.x = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.width >> 1));
+	hzbSize.y = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.height>> 1));
+	uint32_t numMips = std::max(1u, Niagara::FloorLog2(std::max(hzbSize.x, hzbSize.y)));
+	Niagara::Image& depthPyramid = g_BufferMgr.DepthPyramid;
+	depthPyramid.Init(device,
+		VkExtent3D{ hzbSize.x, hzbSize.y, 1 },
+		VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+		0,
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, numMips);
+	for (uint32_t i = 0; i < numMips; ++i)
+		depthPyramid.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D, i);
 
 #if 1
 	Niagara::RenderPass &meshDrawPass = g_PipelineMgr.meshDrawPass;
@@ -1745,6 +1870,10 @@ int main()
 	Niagara::ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
 	updateDrawArgsPipeline.computeShader.Load(device, "./CompiledShaders/DrawCommand.comp.spv");
 	updateDrawArgsPipeline.Init(device);
+
+	Niagara::ComputePipeline& buildDepthPyramidPipeline = g_PipelineMgr.buildDepthPyramidPipeline;
+	buildDepthPyramidPipeline.computeShader.Load(device, "./CompiledShaders/HiZBuild.comp.spv");
+	buildDepthPyramidPipeline.Init(device);
 
 	// Command buffers
 
@@ -1881,6 +2010,22 @@ int main()
 			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
 			0);
 		depthView = g_BufferMgr.DepthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+
+		// Depth pyramid
+		{
+			glm::uvec2 hzbSize;
+			hzbSize.x = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.width >> 1));
+			hzbSize.y = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.height >> 1));
+			uint32_t numMips = std::max(1u, Niagara::FloorLog2(std::max(hzbSize.x, hzbSize.y)));
+			Niagara::Image& depthPyramid = g_BufferMgr.DepthPyramid;
+			depthPyramid.Init(device,
+				VkExtent3D{ hzbSize.x, hzbSize.y, 1 },
+				VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+				0,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, numMips);
+			for (uint32_t i = 0; i < numMips; ++i)
+				depthPyramid.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D, i);
+		}
 
 		// Recreate framebuffers
 		{
@@ -2035,8 +2180,9 @@ int main()
 
 	g_CommandMgr.Cleanup(device);
 
-	// Pipeline
 	g_PipelineMgr.Cleanup(device);
+
+	g_CommonStates.Destroy(device);
 
 	swapchain.Destroy(device);
 

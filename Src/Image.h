@@ -25,6 +25,18 @@ namespace Niagara
 		Image* image{ nullptr };
 	};
 
+	class Sampler
+	{
+	public:
+		Sampler() = default;
+
+		void Init(const Device &device, VkFilter filter = VK_FILTER_LINEAR, VkSamplerMipmapMode mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR, 
+			VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, float maxAnisotropy = 0, VkCompareOp compareOp = VK_COMPARE_OP_NEVER);
+		void Destroy(const Device& device);
+
+		VkSampler sampler{ VK_NULL_HANDLE };
+	};
+
 	class Image
 	{
 	public:

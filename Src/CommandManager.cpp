@@ -132,17 +132,8 @@ namespace Niagara
 
 	void CommandContext::UpdateDescriptorSetInfo(const Pipeline& pipeline)
 	{
-		if (cachedPipelineLayout == pipeline.layout)
-			return;
-
 		for (uint32_t i = 0; i < Pipeline::s_MaxDescrptorSetNum; ++i)
 			pipeline.UpdateDescriptorSetInfo(descriptorSetInfos[i], i);
-
-		cachedPipelineLayout = pipeline.layout;
-
-		cachedDescriptorSetLayouts = pipeline.descriptorSetLayouts;
-
-		cachedDescriptorUpdateTemplate = pipeline.descriptorUpdateTemplate;
 	}
 
 	void CommandContext::BeginCommandBuffer(VkCommandBuffer cmd, VkCommandBufferUsageFlags usage)
@@ -174,16 +165,26 @@ namespace Niagara
 
 	void CommandContext::BindPipeline(VkCommandBuffer cmd, const GraphicsPipeline& pipeline)
 	{
+		if (cachedPipeline == &pipeline)
+			return;
+
 		pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
+
+		cachedPipeline = &pipeline;
 
 		UpdateDescriptorSetInfo(pipeline);
 	}
 
 	void CommandContext::BindPipeline(VkCommandBuffer cmd, const ComputePipeline& pipeline)
 	{
+		if (cachedPipeline == &pipeline)
+			return;
+
 		pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
 		vkCmdBindPipeline(cmd, pipelineBindPoint, pipeline.pipeline);
+
+		cachedPipeline = &pipeline;
 
 		UpdateDescriptorSetInfo(pipeline);
 	}
@@ -230,5 +231,19 @@ namespace Niagara
 		}
 
 		return descriptorSets;
+	}
+
+	void CommandContext::PushConstants(VkCommandBuffer cmd, const std::string& name, uint32_t offset, uint32_t size, void* pValues)
+	{
+		assert(cachedPipeline || pValues != nullptr);
+
+		if (!cachedPipeline->pushConstants.empty())
+		{
+			auto iter = cachedPipeline->pushConstants.find(name);
+			if (iter != cachedPipeline->pushConstants.end())
+			{
+				vkCmdPushConstants(cmd, cachedPipeline->layout, iter->second.stages, offset, size, pValues);
+			}
+		}
 	}
 }

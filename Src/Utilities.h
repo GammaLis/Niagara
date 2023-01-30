@@ -17,6 +17,51 @@ namespace Niagara
 
 	constexpr float EPS = 1e-5f;
 
+	// Ref: UE - PlatformMath
+
+	inline bool IsNaN(float a) { return _isnan(a) != 0; }
+	inline bool IsNaN(double a) { return _isnan(a) != 0; }
+	inline bool IsFinite(float a) { return _finite(a) != 0; }
+	inline bool IsFinite(double a) { return _finite(a) != 0; }
+
+	inline uint32_t FloorLog2(uint32_t val)
+	{
+		// Use BSR to return the log2 of the integer
+		unsigned long log2;
+		if (_BitScanReverse(&log2, val) != 0)
+			return log2;
+
+		return 0;
+	}
+
+	inline uint32_t CountLeadingZeros(uint32_t val)
+	{
+		unsigned long log2;
+		long mask = -long(_BitScanReverse(&log2, val) != 0);
+		return ((31 - log2) & mask) | (32 & ~mask);
+	}
+
+	inline uint32_t CountTrailingZeros(uint32_t val)
+	{
+		if (val == 0)
+			return 32;
+
+		unsigned long bitIndex;	// 0-based, where the LSB is 0 and MSB is 31
+		_BitScanForward(&bitIndex, val);	// Scans from LSB to MSB
+		return bitIndex;
+	}
+
+	inline uint32_t CeilLogTwo(uint32_t val)
+	{
+		int32_t bitmask = ((int32_t)(CountLeadingZeros(val) << 26)) >> 31;
+		return (32 - CountLeadingZeros(val - 1)) & (~bitmask);
+	}
+
+	inline uint32_t RoundUpToPowerOfTwo(uint32_t val)
+	{
+		return 1 << CeilLogTwo(val);
+	}
+
 	inline float ToFloat(uint16_t v)
 	{
 		uint16_t sign = (v >> 15);
@@ -51,6 +96,11 @@ namespace Niagara
 	{
 		float n = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 		return (n < EPS) ? glm::vec3(0.0f) : v / n;
+	}
+
+	inline glm::vec4 GetSizeAndInvSize(uint32_t width, uint32_t height)
+	{
+		return glm::vec4(width, height, 1.0f/width, 1.0f/height);
 	}
 
 	// https://nlguillemot.wordpress.com/2016/12/07/reversed-z-in-opengl/

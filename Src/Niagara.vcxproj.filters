@@ -301,6 +301,9 @@
     <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="..\Shaders\HiZBuild.comp.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Shaders\MeshCommon.h">

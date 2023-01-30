@@ -48,13 +48,10 @@ namespace Niagara
 		VkCommandBuffer cachedCommandBuffer = VK_NULL_HANDLE;
 		VkRenderPass cachedRenderPass = VK_NULL_HANDLE;
 
+		const Pipeline *cachedPipeline = nullptr;
+
 		VkPipelineBindPoint pipelineBindPoint = (VkPipelineBindPoint)0;
-
-		// TODO: Are these needed ? 
-		VkPipelineLayout cachedPipelineLayout = VK_NULL_HANDLE;
-		VkDescriptorUpdateTemplate cachedDescriptorUpdateTemplate = VK_NULL_HANDLE;
-		std::vector<VkDescriptorSetLayout> cachedDescriptorSetLayouts;
-
+		
 		DescriptorSetInfo descriptorSetInfos[Pipeline::s_MaxDescrptorSetNum] = {};
 		DescriptorInfo cachedDescriptorInfos[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
 		VkWriteDescriptorSet cachedWriteDescriptorSets[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
@@ -123,17 +120,21 @@ namespace Niagara
 
 		void PushDescriptorSetWithTemplate(VkCommandBuffer cmd, uint32_t set = 0)
 		{
-			assert(cachedDescriptorUpdateTemplate);
+			assert(cachedPipeline && cachedPipeline->descriptorUpdateTemplate);
 
 			auto descriptorInfos = GetDescriptorInfos(set);
-			vkCmdPushDescriptorSetWithTemplateKHR(cmd, cachedDescriptorUpdateTemplate, cachedPipelineLayout, set, descriptorInfos.data());
+			vkCmdPushDescriptorSetWithTemplateKHR(cmd, cachedPipeline->descriptorUpdateTemplate, cachedPipeline->layout, set, descriptorInfos.data());
 		}
 
 		void PushDescriptorSet(VkCommandBuffer cmd, uint32_t set = 0)
 		{
+			assert(cachedPipeline && cachedPipeline->descriptorUpdateTemplate);
+
 			auto writeDescriptorSets = GetWriteDescriptorSets(set);
-			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipelineLayout, set, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
+			vkCmdPushDescriptorSetKHR(cmd, pipelineBindPoint, cachedPipeline->layout, set, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data());
 		}
+
+		void PushConstants(VkCommandBuffer cmd, const std::string &name, uint32_t offset, uint32_t size, void *pValues);
 
 		void ImageBarrier(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT)
 		{
@@ -143,6 +144,22 @@ namespace Niagara
 			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 			barrier.image = image;
 			barrier.subresourceRange = { aspectFlags, 0, 1, 0, 1 };
+			barrier.oldLayout = oldLayout;
+			barrier.newLayout = newLayout;
+			barrier.srcAccessMask = srcAccessMask;
+			barrier.dstAccessMask = dstAccessMask;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		}
+
+		void ImageBarrier(VkImage image, const VkImageSubresourceRange &subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT)
+		{
+			assert(activeImageMemoryBarriers < s_MaxBarrierNum);
+
+			auto& barrier = cachedImageMemoryBarriers[activeImageMemoryBarriers++];
+			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			barrier.image = image;
+			barrier.subresourceRange = subresourceRange;
 			barrier.oldLayout = oldLayout;
 			barrier.newLayout = newLayout;
 			barrier.srcAccessMask = srcAccessMask;
