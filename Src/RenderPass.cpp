@@ -13,6 +13,7 @@ namespace Niagara
 		for (size_t i = 0; i < attachments.size(); ++i)
 		{
 			VkAttachmentDescription desc{};
+
 			desc.format = attachments[i].format;
 			desc.samples = attachments[i].samples;
 			desc.initialLayout = attachments[i].layout;
@@ -70,7 +71,7 @@ namespace Niagara
 				}
 			}
 
-			// TODO: DepthStencilResovle
+			// TODO: DepthStencilResolve
 			// ...
 		}
 
@@ -91,7 +92,7 @@ namespace Niagara
 
 				attachmentDescriptions[ref.attachment].finalLayout = ref.layout;
 
-				// Dot not use depth attachment if used as input
+				// Do not use depth attachment if used as input
 				if (IsDepthStencilFormat(attachmentDescriptions[ref.attachment].format))
 					subpassDesc.pDepthStencilAttachment = nullptr;
 			}
@@ -144,7 +145,7 @@ namespace Niagara
 	{
 		UpdateAttachments();
 
-		const uint32_t attachmentCount = static_cast<uint32_t>(attachments.size());
+		const auto attachmentCount = static_cast<uint32_t>(attachments.size());
 
 		auto attachmentDescriptions = GetAttachmentDescriptions(attachments, loadStoreInfos);
 
@@ -268,7 +269,8 @@ namespace Niagara
 						defaultDepthStencilAttachment = i;
 					continue;
 				}
-				colorAttachments[0].push_back(VkAttachmentReference{ i, VK_IMAGE_LAYOUT_GENERAL });
+				// TODO: Why Vulkan-Samples use layout `VK_IMAGE_LAYOUT_GENERAL` ?
+				colorAttachments[0].push_back(VkAttachmentReference{ i, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }); // VK_IMAGE_LAYOUT_UNDEFINED VK_IMAGE_LAYOUT_GENERAL
 			}
 
 			desc.pColorAttachments = colorAttachments[0].data();

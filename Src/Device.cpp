@@ -526,7 +526,7 @@ namespace Niagara
 	}
 
 	// Select the best-fit depth format for this device from a list of possible depth (and stencil) formats
-	VkFormat Device::GetSupportedDepthFormat(bool bCheckSamplingSupport)
+	VkFormat Device::GetSupportedDepthFormat(bool bCheckSamplingSupport) const
 	{
 		// All depth formats may be optional, so we need to find a suitable depth format to use
 		static std::vector<VkFormat> depthFormats
@@ -555,7 +555,7 @@ namespace Niagara
 	}
 
 	// Check if an extension is supported by the physical device
-	bool Device::IsExtensionSupported(const std::string& extension)
+	bool Device::IsExtensionSupported(const std::string& extension) const
 	{
 		return std::find(supportedExtensions.begin(), supportedExtensions.end(), extension) != supportedExtensions.end();
 	}

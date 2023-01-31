@@ -11,9 +11,9 @@ namespace Niagara
 	struct Attachment
 	{
 		VkFormat format;
-		VkSampleCountFlagBits samples;
 		VkImageUsageFlagBits usage;
 		VkImageLayout layout;
+		VkSampleCountFlagBits samples;
 
 		explicit Attachment(VkFormat inFormat = VK_FORMAT_UNDEFINED, VkImageUsageFlagBits inUsage = VK_IMAGE_USAGE_SAMPLED_BIT, VkImageLayout inLayout = VK_IMAGE_LAYOUT_UNDEFINED, VkSampleCountFlagBits inSamples = VK_SAMPLE_COUNT_1_BIT)
 			: format{inFormat}, usage{inUsage}, layout{inLayout}, samples{inSamples}

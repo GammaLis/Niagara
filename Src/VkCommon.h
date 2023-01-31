@@ -34,6 +34,8 @@ namespace Niagara
 
 	uint32_t BitsPerPixel(VkFormat format);
 
+	VkViewport GetViewport(const VkRect2D& rect, float minDepth = 0.0f, float maxDepth = 1.0f, bool flipViewport = false);
+
 	// Image memory barrier structure used to define memory access for an image view during command recording
 	struct ImageMemoryBarrier
 	{

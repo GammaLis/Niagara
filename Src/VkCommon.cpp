@@ -171,6 +171,36 @@ namespace Niagara
 		}
 	}
 
+	VkViewport GetViewport(const VkRect2D& rect, float minDepth, float maxDepth, bool flipViewport)
+	{
+		float fw = static_cast<float>(rect.extent.width);
+		float fh = static_cast<float>(rect.extent.height);
+		float fx = static_cast<float>(rect.offset.x);
+		float fy = static_cast<float>(rect.offset.y);
+
+		VkViewport viewport{};
+
+		if (flipViewport)
+		{
+			viewport.x = fx;
+			viewport.y = fy + fh;
+			viewport.width = fw;
+			viewport.height = -fh;
+		}
+		else
+		{
+			viewport.x = fx;
+			viewport.y = fy;
+			viewport.width = fw;
+			viewport.height = fh;
+		}
+
+		viewport.minDepth = minDepth;
+		viewport.maxDepth = maxDepth;
+
+		return viewport;
+	}
+
 	VkImageMemoryBarrier GetImageMemoryBarrier(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask)
 	{
 		VkImageMemoryBarrier barrier{ };

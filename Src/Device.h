@@ -75,8 +75,8 @@ namespace Niagara
 		uint32_t GetQueueFamilyIndex(VkQueueFlags queueFlags) const;
 		VkResult CreateLogicalDevice(VkPhysicalDeviceFeatures enabledFeatures, const std::vector<const char*>& enabledExtensions, void* pNextChain, bool bUseSwapChain = true, VkQueueFlags requestedQueueTypes = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
 		VkCommandPool CreateCommandPool(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT) const;
-		VkFormat GetSupportedDepthFormat(bool bCheckSamplingSupport);
-		bool IsExtensionSupported(const std::string &extension);
+		VkFormat GetSupportedDepthFormat(bool bCheckSamplingSupport) const;
+		bool IsExtensionSupported(const std::string &extension) const;
 	};
 
 	extern Device* g_Device;

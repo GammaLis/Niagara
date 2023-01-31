@@ -43,7 +43,7 @@
 
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
-#define USE_MESHLETS 0
+#define USE_MESHLETS 1
 #define USE_MULTI_DRAW_INDIRECT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
@@ -84,6 +84,8 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 
 	const bool pressed = action != GLFW_RELEASE;
 
+	if (!pressed) return;
+
 	CameraManipulator::Inputs &inputs = Niagara::g_Inputs;
 	inputs.ctrl	 = mods & GLFW_MOD_CONTROL;
 	inputs.shift = mods & GLFW_MOD_SHIFT;
@@ -91,7 +93,7 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 
 	auto& cameraManip = CameraManipulator::Singleton();
 
-	float factor = static_cast<float>(g_DeltaTime);
+	auto factor = static_cast<float>(g_DeltaTime);
 
 	// For all pressed keys - apply the action
 	// cameraManip.KeyMotion(0, 0, CameraManipulator::Actions::NoAction);
@@ -519,8 +521,43 @@ struct BufferManager
 	GpuBuffer meshletDataBuffer;
 #endif
 
-	Niagara::Image DepthTexture;
-	Niagara::Image DepthPyramid;
+	// View dependent textures
+	Niagara::Image colorBuffer;
+	Niagara::Image depthBuffer;
+	Niagara::Image depthPyramid;
+
+	void InitViewDependentBuffers(const Niagara::Device &device, const VkExtent2D &renderExtent, VkFormat colorFormat = VK_FORMAT_B8G8R8A8_SRGB, VkFormat depthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT)
+	{
+		// Color texture
+		colorBuffer.Init(device,
+			VkExtent3D{ renderExtent.width, renderExtent.height, 1 },
+			colorFormat,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+			0);
+		auto colorView = colorBuffer.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+
+		// Depth texture
+		depthBuffer.Init(
+			device,
+			VkExtent3D{ renderExtent.width, renderExtent.height, 1 },
+			depthFormat,
+			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+			0);
+		auto depthView = depthBuffer.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
+
+		// Depth pyramid
+		glm::uvec2 hzbSize;
+		hzbSize.x = std::max(1u, Niagara::RoundUpToPowerOfTwo(renderExtent.width >> 1));
+		hzbSize.y = std::max(1u, Niagara::RoundUpToPowerOfTwo(renderExtent.height >> 1));
+		uint32_t numMips = std::max(1u, Niagara::FloorLog2(std::max(hzbSize.x, hzbSize.y)));
+		depthPyramid.Init(device,
+			VkExtent3D{ hzbSize.x, hzbSize.y, 1 },
+			VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+			0,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, numMips);
+		for (uint32_t i = 0; i < numMips; ++i)
+			depthPyramid.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D, i);
+	}
 
 	void Cleanup(const Niagara::Device &device)
 	{
@@ -540,8 +577,10 @@ struct BufferManager
 		meshletDataBuffer.Destroy(device);
 #endif
 
-		DepthTexture.Destroy(device);
-		DepthPyramid.Destroy(device);
+		// View dependent textures
+		colorBuffer.Destroy(device);
+		depthBuffer.Destroy(device);
+		depthPyramid.Destroy(device);
 	}
 };
 BufferManager g_BufferMgr{};
@@ -791,31 +830,6 @@ VkInstance GetVulkanInstance()
 }
 
 
-VkViewport GetViewport(const VkRect2D &rect, float minDepth = 0.0f, float maxDepth = 1.0f)
-{
-	float fw = static_cast<float>(rect.extent.width);
-	float fh = static_cast<float>(rect.extent.height);
-	float fx = static_cast<float>(rect.offset.x);
-	float fy = static_cast<float>(rect.offset.y);
-
-	VkViewport viewport{};
-#if !FLIP_VIEWPORT
-	viewport.x = fx;
-	viewport.y = fy;
-	viewport.width = fw;
-	viewport.height = fh;
-#else
-	viewport.x = fx;
-	viewport.y = fy + fh;
-	viewport.width = fw;
-	viewport.height = -fh;
-#endif
-	viewport.minDepth = minDepth;
-	viewport.maxDepth = maxDepth;
-
-	return viewport;
-}
-
 void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const std::vector<VkImage> &images, VkFormat imageFormat)
 {
 	imageViews.resize(images.size());
@@ -920,7 +934,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 	// ...
 
 	// Viewports and scissors
-	pipelineState.viewports = { GetViewport(viewportRect) };
+	pipelineState.viewports = { Niagara::GetViewport(viewportRect, 0, 1, FLIP_VIEWPORT) };
 	pipelineState.scissors = { viewportRect };
 
 	// Rasterization state
@@ -972,7 +986,7 @@ VkFramebuffer GetFramebuffer(VkDevice device, const std::vector<VkImageView> &at
 	return framebuffer;
 }
 
-void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, uint32_t imageIndex, const Geometry &geometry, const VkRect2D &viewportRect)
+void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, const Niagara::Swapchain &swapchain, uint32_t imageIndex, const Geometry &geometry)
 {
 	g_CommandContext.BeginCommandBuffer(cmd);
 
@@ -1020,16 +1034,36 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		groupsX = Niagara::DivideAndRoundUp(drawArgsBuffer.elementCount, GroupSize);
 		vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
 
-		g_CommandContext.BufferBarrier(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.size), VkDeviceSize(0), 
+		g_CommandContext.BufferBarrier(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.size), VkDeviceSize(0),
+			VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+		g_CommandContext.BufferBarrier(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(0),
 			VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
 
 		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
 	}
 
 	// Mesh draw pipeline
+	auto &colorBuffer = g_BufferMgr.colorBuffer;
+	auto &depthBuffer = g_BufferMgr.depthBuffer;
+
+	g_CommandContext.ImageBarrier(colorBuffer.image, VK_IMAGE_ASPECT_COLOR_BIT, 
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 
+		0, 0); // VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+
+	bool hasStencilBuffer = Niagara::IsDepthStencilFormat(depthBuffer.format);
+	VkImageAspectFlags depthAspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT | (hasStencilBuffer ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
+	VkImageLayout depthLayout = hasStencilBuffer ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	g_CommandContext.ImageBarrier(depthBuffer.image, 
+		depthAspectFlags,
+		VK_IMAGE_LAYOUT_UNDEFINED, depthLayout,
+		0, 0); // VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+
+	g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+
+	auto viewportRect = VkRect2D{ VkOffset2D{0, 0}, swapchain.extent };
 
 	// Set viewports & scissors
-	VkViewport dynamicViewport = GetViewport(viewportRect);
+	VkViewport dynamicViewport = Niagara::GetViewport(viewportRect, 0, 1, FLIP_VIEWPORT);
 	vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
 	vkCmdSetScissor(cmd, 0, 1, &viewportRect);
 
@@ -1056,7 +1090,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		clearValues[renderPass->activeColorAttachmentCount].depthStencil = { 0.0f, 0 };
 	}
 
-	g_CommandContext.BeginRenderPass(cmd, meshDrawPipeline.renderPass->renderPass, framebuffers[imageIndex], viewportRect, clearValues);
+	g_CommandContext.BeginRenderPass(cmd, meshDrawPipeline.renderPass->renderPass, framebuffers[0], viewportRect, clearValues);
 
 	g_CommandContext.BindPipeline(cmd, meshDrawPipeline);
 
@@ -1137,13 +1171,13 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 #if 1
 	// Generate depth pyramid
 	{
-		const auto& depthTexture = g_BufferMgr.DepthTexture;
-		const auto& depthPyramid = g_BufferMgr.DepthPyramid;
+		const auto& depthPyramid = g_BufferMgr.depthPyramid;
 		
 		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.buildDepthPyramidPipeline);
 
-		g_CommandContext.ImageBarrier(depthTexture.image, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
-			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		g_CommandContext.ImageBarrier(depthBuffer.image, 
+			depthAspectFlags,
+			depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
 		VkImageSubresourceRange subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
@@ -1165,11 +1199,11 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 			if (i == 0)
 			{
-				srcImageView = depthTexture.views[0].view;
+				srcImageView = depthBuffer.views[0].view;
 
 				srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-				constants.srcSize = Niagara::GetSizeAndInvSize(depthTexture.extent.width, depthTexture.extent.height);
+				constants.srcSize = Niagara::GetSizeAndInvSize(depthBuffer.extent.width, depthBuffer.extent.height);
 
 				g_CommandContext.ImageBarrier(depthPyramid.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT);
 
@@ -1190,6 +1224,9 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 				g_CommandContext.ImageBarrier(depthPyramid.image, subresourceRange, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT);
 
 				g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+				w = std::max(1u, w >> 1);
+				h = std::max(1u, h >> 1);
 			}
 
 			g_CommandContext.PushConstants(cmd, "_Constants", 0, sizeof(constants), &constants);
@@ -1202,14 +1239,36 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 			groupsX = Niagara::DivideAndRoundUp(w, GroupSize);
 			groupsY = Niagara::DivideAndRoundUp(h, GroupSize);
 			vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
-
-			w = std::max(1u, w >> 1);
-			h = std::max(1u, h >> 1);
 		}
-		
 	}
 
 #endif
+
+	// Update backbuffer
+	{
+		auto swapchainImage = swapchain.images[imageIndex];
+		
+		g_CommandContext.ImageBarrier(swapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+			0, VK_ACCESS_TRANSFER_WRITE_BIT);
+		g_CommandContext.ImageBarrier(colorBuffer.image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+		g_CommandContext.Blit(cmd, colorBuffer.image, swapchain.images[imageIndex], 
+			VkRect2D{ {0, 0}, { colorBuffer.extent.width, colorBuffer.extent.height} }, { {0, 0}, swapchain.extent });
+
+		g_CommandContext.ImageBarrier(swapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT);
+		g_CommandContext.ImageBarrier(colorBuffer.image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+			VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT);
+
+		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT); // VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+	}
 
 	g_CommandContext.EndCommandBuffer(cmd);
 }
@@ -1309,20 +1368,19 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 
 /// Main
 
-void Render(VkDevice device, SyncObjects &syncObjects, uint32_t imageIndex, VkCommandBuffer cmd, VkQueue graphicsQueue,
-	std::vector<VkFramebuffer> &framebuffers, const Geometry &geometry, const VkRect2D &viewportRect)
+void Render(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, const Niagara::Swapchain& swapchain, uint32_t imageIndex, const Geometry& geometry, VkQueue graphicsQueue, SyncObjects& syncObjects)
 {
 	vkResetCommandBuffer(cmd, 0);
 
 	// Recording the command buffer
- 	RecordCommandBuffer(cmd, framebuffers, imageIndex, geometry, viewportRect);
+ 	RecordCommandBuffer(cmd, framebuffers, swapchain, imageIndex, geometry);
 
 	// Submitting the command buffer
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
 	VkSemaphore waitSemaphores[] = { syncObjects.imageAvailableSemaphore };
-	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_TRANSFER_BIT };
 	submitInfo.waitSemaphoreCount  = ARRAYSIZE(waitSemaphores);
 	submitInfo.pWaitSemaphores = waitSemaphores;
 	submitInfo.pWaitDstStageMask = waitStages;
@@ -1459,8 +1517,8 @@ size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, c
 			&vertices[0].p.x,
 			vertices.size(),
 			sizeof(Vertex));
-		meshlet.vertexCount = optMeshlets[i].vertex_count;
-		meshlet.triangleCount = optMeshlets[i].triangle_count;
+		meshlet.vertexCount = static_cast<uint8_t>(optMeshlets[i].vertex_count);
+		meshlet.triangleCount = static_cast<uint8_t>(optMeshlets[i].triangle_count);
 		meshlet.vertexOffset = meshletDataOffset;
 		meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
 		meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[0], 0);
@@ -1738,6 +1796,7 @@ int main()
 	// Device features
 	VkPhysicalDeviceFeatures physicalDeviceFeatures{};
 	physicalDeviceFeatures.multiDrawIndirect = true;
+	physicalDeviceFeatures.samplerAnisotropy = true;
 
 	// Device extensions
 	void* pNextChain = nullptr;
@@ -1808,34 +1867,13 @@ int main()
 	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
 	assert(graphicsQueue);
 
-	// Depth texture
-	VkFormat depthFormat = device.GetSupportedDepthFormat(true);
-	Niagara::Image& depthTexture = g_BufferMgr.DepthTexture;
-	depthTexture.Init(
-		device, 
-		VkExtent3D{ renderExtent.width, renderExtent.height, 1 },
-		depthFormat, 
-		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
-		0);
-	auto depthView = depthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
-
-	// Depth pyramid
-	glm::uvec2 hzbSize;
-	hzbSize.x = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.width >> 1));
-	hzbSize.y = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.height>> 1));
-	uint32_t numMips = std::max(1u, Niagara::FloorLog2(std::max(hzbSize.x, hzbSize.y)));
-	Niagara::Image& depthPyramid = g_BufferMgr.DepthPyramid;
-	depthPyramid.Init(device,
-		VkExtent3D{ hzbSize.x, hzbSize.y, 1 },
-		VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-		0,
-		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, numMips);
-	for (uint32_t i = 0; i < numMips; ++i)
-		depthPyramid.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D, i);
+	VkFormat colorFormat = swapchain.colorFormat;
+	VkFormat depthFormat = device.GetSupportedDepthFormat(false);
+	g_BufferMgr.InitViewDependentBuffers(device, renderExtent, colorFormat, depthFormat);
 
 #if 1
 	Niagara::RenderPass &meshDrawPass = g_PipelineMgr.meshDrawPass;
-	std::vector<Niagara::Attachment> colorAttachments{ Niagara::Attachment{swapchain.colorFormat} };
+	std::vector<Niagara::Attachment> colorAttachments{ Niagara::Attachment{ colorFormat } };
 	std::vector<Niagara::LoadStoreInfo> colorLoadStoreInfos{ Niagara::LoadStoreInfo{} };
 	Niagara::Attachment depthAttachment{ depthFormat };
 	Niagara::LoadStoreInfo depthLoadStoreInfo{};
@@ -1853,14 +1891,12 @@ int main()
 	assert(renderPass);
 
 	// Framebuffer
-	std::vector<VkFramebuffer> framebuffers(swapchain.imageCount);
-	// Frame attachments
-	std::vector<std::vector<VkImageView>> frameAttachments(swapchain.imageCount);
-	for (uint32_t i = 0; i < swapchain.imageCount; ++i)
+	const uint32_t framebufferCount = 2;
+	std::vector<VkFramebuffer> framebuffers(framebufferCount);
+	for (uint32_t i = 0; i < framebufferCount; ++i)
 	{
-		frameAttachments[i] = { swapchain.imageViews[i], depthView.view };
-
-		framebuffers[i] = GetFramebuffer(device, frameAttachments[i], renderExtent, renderPass);
+		std::vector<VkImageView> frameAttachments = { g_BufferMgr.colorBuffer.views[0].view, g_BufferMgr.depthBuffer.views[0].view };
+		framebuffers[i] = GetFramebuffer(device, frameAttachments, renderExtent, renderPass);
 	}
 	
 	// Pipeline
@@ -1892,11 +1928,12 @@ int main()
 	
 	// Camera
 	glm::vec3 eye{ 0, 0, 10 };
-	glm::vec3 center{};
+	glm::vec3 center{ };
 	glm::vec3 up{ 0, 1, 0 };
 	auto& camera = Niagara::CameraManipulator::Singleton();
-	camera.SetWindowSize(swapchain.extent.width, swapchain.extent.height);
+	camera.SetWindowSize((int)swapchain.extent.width, (int)swapchain.extent.height);
 	camera.SetSpeed(0.02f);
+	camera.m_ClipPlanes.x = 1.0f;
 	camera.SetCamera( { eye, center, up, glm::radians(90.0f) } );
 	
 	// Buffers
@@ -2001,43 +2038,22 @@ int main()
 		swapchain.UpdateSwapchain(device, window, false);
 
 		renderExtent = swapchain.extent;
+		colorFormat = swapchain.colorFormat;
 
-		// recreate images
-		g_BufferMgr.DepthTexture.Init(
-			device,
-			{ renderExtent.width, renderExtent.height,1 },
-			depthFormat,
-			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 
-			0);
-		depthView = g_BufferMgr.DepthTexture.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
-
-		// Depth pyramid
-		{
-			glm::uvec2 hzbSize;
-			hzbSize.x = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.width >> 1));
-			hzbSize.y = std::max(1u, Niagara::RoundUpToPowerOfTwo(swapchain.extent.height >> 1));
-			uint32_t numMips = std::max(1u, Niagara::FloorLog2(std::max(hzbSize.x, hzbSize.y)));
-			Niagara::Image& depthPyramid = g_BufferMgr.DepthPyramid;
-			depthPyramid.Init(device,
-				VkExtent3D{ hzbSize.x, hzbSize.y, 1 },
-				VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-				0,
-				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, numMips);
-			for (uint32_t i = 0; i < numMips; ++i)
-				depthPyramid.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D, i);
-		}
+		// recreate view dependent textures
+		g_BufferMgr.InitViewDependentBuffers(device, renderExtent, colorFormat, depthFormat);
 
 		// Recreate framebuffers
 		{
 			for (auto& framebuffer : framebuffers)
 				vkDestroyFramebuffer(device, framebuffer, nullptr);
 			
-			framebuffers.resize(swapchain.imageCount);
-			for (uint32_t i = 0; i < swapchain.imageCount; ++i)
+			framebuffers.resize(framebufferCount);
+			
+			for (uint32_t i = 0; i < framebufferCount; ++i)
 			{
-				std::vector<VkImageView> attachments{ swapchain.imageViews[i], depthView.view };
-				framebuffers[i] = GetFramebuffer(device, attachments, renderExtent, renderPass);
-				assert(framebuffers[i]);
+				std::vector<VkImageView> frameAttachments = { g_BufferMgr.colorBuffer.views[0].view, g_BufferMgr.depthBuffer.views[0].view };
+				framebuffers[i] = GetFramebuffer(device, frameAttachments, renderExtent, renderPass);
 			}
 		}
 
@@ -2109,19 +2125,18 @@ int main()
 		// Only reset the fence if we are submitting work
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
+		/*
 		{
 			auto cmd = Niagara::BeginSingleTimeCommands();
 
 			g_CommandContext.ImageBarrier(swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-			g_CommandContext.ImageBarrier(depthTexture.image, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
 			g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
 
 			Niagara::EndSingleTimeCommands(cmd);
-		}
+		}*/
 
-
-		Render(device, currentSyncObjects, imageIndex, currentCommandBuffer, graphicsQueue, framebuffers, geometry, { {0, 0}, swapchain.extent});
+		Render(currentCommandBuffer, framebuffers, swapchain, imageIndex, geometry, graphicsQueue, currentSyncObjects);
 
 		{
 			auto cmd = Niagara::BeginSingleTimeCommands();
