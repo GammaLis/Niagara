@@ -1,4 +1,5 @@
 #include "Shaders.h"
+#include "Device.h"
 #include "Utilities.h"
 #include <spirv-headers/spirv.h>
 
@@ -418,12 +419,22 @@ namespace Niagara
 		return updateTemplate;
 	}
 
-
-#if 0
-	std::vector<VkDescriptorSetLayoutBinding> GetSetBindings(const std::vector<const Shader*>& shaders)
+	bool Shader::Load(const Device& device, const std::string& fileName)
 	{
-		// for (const auto &resource : shaders)
+		Cleanup(device);
+
+		return LoadShader(device, *this, fileName);
 	}
-#endif
+
+	void Shader::Cleanup(const Device& device)
+	{
+		if (module)
+			vkDestroyShaderModule(device, module, nullptr);
+
+		stage = VkShaderStageFlagBits(0);
+		resourceMask = 0;
+		usePushConstants = false;
+		resources.clear();
+	}
 
 }

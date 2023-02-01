@@ -98,8 +98,9 @@ namespace Niagara
 		VkDescriptorType types[32] = {};
 	};
 
-
 	VkShaderModule LoadShader(VkDevice device, const std::string& fileName);
+
+	class Device;
 	
 	class Shader
 	{
@@ -130,22 +131,8 @@ namespace Niagara
 
 		bool IsValid() const { return module != VK_NULL_HANDLE; }
 
-		bool Load(VkDevice device, const std::string &fileName)
-		{
-			Cleanup(device);
+		bool Load(const Device &device, const std::string &fileName);
 
-			return LoadShader(device, *this, fileName);
-		}
-
-		void Cleanup(VkDevice device)
-		{
-			if (module)
-				vkDestroyShaderModule(device, module, nullptr);
-
-			stage = VkShaderStageFlagBits(0);
-			resourceMask = 0;
-			usePushConstants = false;
-			resources.clear();
-		}
+		void Cleanup(const Device& device);
 	};
 }

@@ -209,10 +209,10 @@ namespace Niagara
 	{
 	public:
 		// Shaders
-		Shader vertShader;
-		Shader taskShader;
-		Shader meshShader;
-		Shader fragShader;
+		const Shader *vertShader{ nullptr };
+		const Shader *taskShader{ nullptr };
+		const Shader *meshShader{ nullptr };
+		const Shader *fragShader{ nullptr };
 
 		// States
 		GraphicsPipelineState pipelineState;
@@ -220,31 +220,33 @@ namespace Niagara
 		virtual void Init(VkDevice device) override;
 		virtual void Destroy(VkDevice device) override;
 
-		virtual std::vector<const Shader*> GetPipelineShaders() const override
-		{
-			return { &vertShader, &taskShader, &meshShader, &fragShader };
-		}
+		virtual std::vector<const Shader*> GetPipelineShaders() const override;
+
 		virtual bool ShadersValid() const override
 		{
-			return (fragShader.module != VK_NULL_HANDLE) && (vertShader.module != VK_NULL_HANDLE || meshShader.module != VK_NULL_HANDLE);
+			return (fragShader != nullptr && fragShader->IsValid()) && 
+				(vertShader != nullptr && vertShader->IsValid()|| meshShader != nullptr && meshShader->IsValid());
 		}
 	};
 
 	class ComputePipeline : public Pipeline
 	{
 	public:
-		Shader computeShader;
+		const Shader *compShader{ nullptr };
 
 		virtual void Init(VkDevice device) override;
 		virtual void Destroy(VkDevice device) override;
 
 		virtual std::vector<const Shader*> GetPipelineShaders() const override
 		{
-			return { &computeShader };
+			std::vector<const Shader*> shaders;
+			if (compShader) 
+				shaders.push_back(compShader);
+			return shaders;
 		}
 		virtual bool ShadersValid() const override
 		{
-			return computeShader.module != VK_NULL_HANDLE;
+			return compShader != nullptr && compShader->IsValid();
 		}
 	};
 }

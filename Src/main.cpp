@@ -169,6 +169,41 @@ VkDevice g_Device = VK_NULL_HANDLE;
 
 VkCommandPool g_CommandPool = VK_NULL_HANDLE;
 
+// Shaders
+struct ShaderManager
+{
+	Niagara::Shader meshVert;
+	Niagara::Shader meshFrag;
+	Niagara::Shader meshTask;
+	Niagara::Shader meshMesh;
+
+	Niagara::Shader cullComp;
+	Niagara::Shader buildHiZComp;
+
+	void Init(const Niagara::Device& device)
+	{
+		meshTask.Load(device, "./CompiledShaders/SimpleMesh.task.spv");
+		meshMesh.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
+		meshVert.Load(device, "./CompiledShaders/SimpleMesh.vert.spv");
+		meshFrag.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
+
+		cullComp.Load(device, "./CompiledShaders/DrawCommand.comp.spv");
+		buildHiZComp.Load(device, "./CompiledShaders/HiZBuild.comp.spv");
+	}
+
+	void Cleanup(const Niagara::Device& device)
+	{
+		meshVert.Cleanup(device);
+		meshFrag.Cleanup(device);
+		meshTask.Cleanup(device);
+		meshMesh.Cleanup(device);
+
+		cullComp.Cleanup(device);
+		buildHiZComp.Cleanup(device);
+	}
+};
+ShaderManager g_ShaderMgr{};
+
 // Samplers
 struct CommonStates
 {
@@ -193,7 +228,7 @@ struct CommonStates
 		pointRepeatSampler.Destroy(device);
 	}
 };
-CommonStates g_CommonStates;
+CommonStates g_CommonStates{};
 
 using Niagara::g_CommandMgr;
 using Niagara::g_CommandContext;
@@ -500,6 +535,7 @@ struct alignas(16) ViewUniformBufferParameters
 	glm::vec4 frustumPlanes[6];
 	glm::vec4 debugValue;
 	glm::vec3 camPos;
+	uint32_t drawCount;
 };
 ViewUniformBufferParameters g_ViewUniformBufferParameters;
 
@@ -909,16 +945,13 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 
 	// Pipeline shaders
 #if USE_MESHLETS
-	pipeline.taskShader.Load(device, "./CompiledShaders/SimpleMesh.task.spv");
-	pipeline.meshShader.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
+	pipeline.taskShader = &g_ShaderMgr.meshTask;
+	pipeline.meshShader = &g_ShaderMgr.meshMesh;
 #else
-	pipeline.vertShader.Load(device, "./CompiledShaders/SimpleMesh.vert.spv");
+	pipeline.vertShader = &g_ShaderMgr.meshVert;
 #endif
-	pipeline.fragShader.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
-
-#else
-	pipeline.vertShader.Load(device, "./CompiledShaders/SimpleTriangle.vert.spv");
-	pipeline.fragShader.Load(device, "./CompiledShaders/SimpleTriangle.frag.spv");
+	pipeline.fragShader = &g_ShaderMgr.meshFrag;
+	
 #endif
 
 	// Pipeline states
@@ -955,7 +988,15 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 	}
 
 	// Color blend state
-	// ...
+#if 0
+	{
+		auto &blendStateAttachments = pipelineState.colorBlendAttachments;
+		Niagara::ColorBlendAttachmentState blendAttachmentState{ VK_TRUE };
+		blendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		blendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		blendStateAttachments = { blendAttachmentState };
+	}
+#endif
 
 	// Dynamic states
 	// ...
@@ -1861,7 +1902,10 @@ int main()
 	g_CommandMgr.Init(device);
 
 	// Common states
-	g_CommonStates.Init(device);	
+	g_CommonStates.Init(device);
+
+	// Shaders
+	g_ShaderMgr.Init(device);
 
 	// Retrieving queue handles
 	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
@@ -1904,11 +1948,11 @@ int main()
 	GetMeshDrawPipeline(device, pipeline, meshDrawPass, 0, { {0, 0}, renderExtent });
 
 	Niagara::ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
-	updateDrawArgsPipeline.computeShader.Load(device, "./CompiledShaders/DrawCommand.comp.spv");
+	updateDrawArgsPipeline.compShader = &g_ShaderMgr.cullComp;
 	updateDrawArgsPipeline.Init(device);
 
 	Niagara::ComputePipeline& buildDepthPyramidPipeline = g_PipelineMgr.buildDepthPyramidPipeline;
-	buildDepthPyramidPipeline.computeShader.Load(device, "./CompiledShaders/HiZBuild.comp.spv");
+	buildDepthPyramidPipeline.compShader = &g_ShaderMgr.buildHiZComp;
 	buildDepthPyramidPipeline.Init(device);
 
 	// Command buffers
@@ -1981,6 +2025,9 @@ int main()
 	// Preparing indirect draw commands
 	const uint32_t DrawCount = DRAW_COUNT;
 	const float SceneRadius = SCENE_RADIUS;
+
+	g_ViewUniformBufferParameters.drawCount = DrawCount;
+
 	std::vector<MeshDraw> meshDraws(DrawCount);
 	for (uint32_t i = 0; i < DrawCount; ++i)
 	{
@@ -2092,7 +2139,7 @@ int main()
 		g_ViewUniformBufferParameters.viewMatrix = camera.GetViewMatrix();
 		g_ViewUniformBufferParameters.projMatrix = camera.GetProjMatrix();
 		g_ViewUniformBufferParameters.camPos = camera.GetCamera().eye;
-		Niagara::GetFrustumPlanes(g_ViewUniformBufferParameters.frustumPlanes, camera.GetProjMatrix(), /*reversedZ = */ true);
+		Niagara::GetFrustumPlanes(g_ViewUniformBufferParameters.frustumPlanes, camera.GetProjMatrix(), /* reversedZ = */ true);
 		// Max draw distance
 		g_ViewUniformBufferParameters.frustumPlanes[5] = glm::vec4(0, 0, -1, -MAX_DRAW_DISTANCE);
 		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters), 1);
@@ -2197,6 +2244,8 @@ int main()
 
 	g_PipelineMgr.Cleanup(device);
 
+	g_ShaderMgr.Cleanup(device);
+
 	g_CommonStates.Destroy(device);
 
 	swapchain.Destroy(device);
@@ -2210,58 +2259,3 @@ int main()
 
 	return 0;
 }
-
-/**
-* 1. Instance and physical device selection
-* A Vulkan application starts by setting up the Vulkan API through a `VkInstance`. An instance is created by describing your application and
-* any API extensions you will be using. After creating the instance, you can query for Vulkan supported hardware and select one or more
-* `VkPhysicalDevice`s to use for operations.
-* 
-* 2. Logical device and queue families
-* After selecting the right hardware device to use, you need to create a `VkDevice`(logical device), where you describe more specifically
-* which `VkPhysicalDeviceFeatures` you will be using, like multi viewport rendering and 64 bit floats. You also need to specify
-* which queue families you would like to use. Most operations performed with Vulkan, like draw commands and memory operations,
-* are asynchronously executed by submitting them to a `VkQueue`. Queues are allocated from queue families, where each queue family
-* supports a specific set of operations in its queues. For example, there could be separate queue families for graphics, compute and
-* memory transfer operations.
-* 
-* 3. Window surface and swap chain
-* We need to create a window to present rendered images to. And we need 2 more components to actually render to a window: 
-* a window surface (`VkSurfaceKHR`) and a swap chain (`VkSwapchainKHR`). The surface is a cross-platform abstraction over windows
-* to render to and is generally instantiated by providing a reference to the native window handle, for example `HWND` on Windows.
-* The swap chain is a collection of render targets. Its basic purpose is to ensure that the image that we're currently rendering to
-* is different from the one that is currently on the screen. This is important to make sure that only complete images are shown.
-* 
-* 4. Image views and framebuffers
-* To draw to an image acquired from the swap chain, we have to wrap it into a `VkImageView` and `VkFramebuffer`. 
-* An image view references a specific part of an image to be used, and a framebuffer references image views that are to be used 
-* for color, depth and stencil targets.
-* 
-* 5. Render passes
-* Render passes in Vulkan describe the type of images that are used during rendering operations, how they will be used, and 
-* how their contents should be treated.
-* 
-* 6. Graphics pipeline
-* The graphics pipeline in Vulkan is set up by creating a `VkPipeline` object. It describes the configurable state of the graphics 
-* card, like the viewport and depth buffer operation and the programmable state using `VkShaderModule` objects. The `VkShaderModule`
-* objects are created from shader byte code.
-* One of the most distinctive features of Vulkan compared to existing APIs, is that almost all configuration of the graphics pipeline
-* needs to be set in advance. That means that if you want to switch to a different shader or slightly change your vertex layout, 
-* then you need to entirely recreate the graphics pipeline. That means you will have to create many `VkPipeline` objects in advance
-* for all the different combinations you need for your rendering operations. Only some basic configuration, like viewport size and
-* clear color, can be changed dynamically.
-* 
-* 7. Command pools and command buffers
-* The drawing operations first need to be recorded into a `VkCommandBuffer` before they can be submitted. These command buffers are
-* allocated from a `VkCommandPool` that is associated with a specific queue family. To draw a simple triangle, we need to 
-* record a command buffer with the following operations:
-* * Begin the render pass
-* * Bind the graphics pipeline
-* * Draw 3 vertices
-* * End the render pass
-* 
-* 8. Main loop
-* Now that the drawing commands have been wrapped into a command buffer, the main loop is quite straightforward. We first acquire
-* an image from the swap chain with `vkAcquireNextImageKHR`. We can then select the appropriate command buffer for that image and
-* execute it with `vkQueueSubmit`. Finally, we return the image to the swap chain for presentation to the screen with `vkQueuePresentKHR`.
-*/

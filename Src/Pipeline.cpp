@@ -7,6 +7,7 @@ namespace Niagara
 	void Pipeline::GatherDescriptors()
 	{
 		auto shaders = GetPipelineShaders();
+		assert(!shaders.empty());
 
 		auto &descriptorSetInfo = descriptorSetInfos[0];
 
@@ -44,8 +45,14 @@ namespace Niagara
 
 	void Pipeline::SpirvCrossGatherDescriptors()
 	{
+		pushConstants.clear();
+		shaderResourceMap.clear();
+		setResources.clear();
+
 		// Collect and combine all the shader resources from each of the shader modules
 		auto shaders = GetPipelineShaders();
+		assert(!shaders.empty());
+
 		for (const auto &shader : shaders)
 		{
 			if (!shader->IsValid()) continue;
@@ -105,6 +112,8 @@ namespace Niagara
 		shaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		
 		auto shaders = GetPipelineShaders();
+		assert(!shaders.empty());
+
 		for (const auto& shader : shaders)
 		{
 			if (shader->IsValid())
@@ -171,6 +180,7 @@ namespace Niagara
 	VkDescriptorSetLayout Pipeline::CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported) const
 	{
 		auto shaders = GetPipelineShaders();
+		assert(!shaders.empty());
 
 		std::vector<VkDescriptorSetLayoutBinding> setBindings = Shader::GetSetBindings(shaders, descriptorSetInfos[0].types, descriptorSetInfos[0].mask);
 
@@ -322,6 +332,8 @@ namespace Niagara
 	{
 		assert(ShadersValid());
 
+		Destroy(device);
+
 #if USE_SPIRV_CROSS
 		SpirvCrossGatherDescriptors();
 
@@ -411,12 +423,23 @@ namespace Niagara
 
 	void GraphicsPipeline::Destroy(VkDevice device)
 	{
-		vertShader.Cleanup(device);
-		taskShader.Cleanup(device);
-		meshShader.Cleanup(device);
-		fragShader.Cleanup(device);
-
 		Pipeline::Destroy(device);
+	}
+
+	std::vector<const Shader*> GraphicsPipeline::GetPipelineShaders() const
+	{
+		std::vector<const Shader*> shaders;
+
+		if (vertShader) 
+			shaders.push_back(vertShader);
+		if (fragShader) 
+			shaders.push_back(fragShader);
+		if (taskShader) 
+			shaders.push_back(taskShader);
+		if (meshShader) 
+			shaders.push_back(meshShader);
+
+		return shaders;
 	}
 
 
@@ -440,8 +463,6 @@ namespace Niagara
 
 	void ComputePipeline::Destroy(VkDevice device)
 	{
-		computeShader.Cleanup(device);
-
 		Pipeline::Destroy(device);
 	}
 	
