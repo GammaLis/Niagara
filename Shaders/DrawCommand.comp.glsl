@@ -3,7 +3,7 @@
 #extension GL_GOOGLE_include_directive	: require
 #include "MeshCommon.h"
 
-#define USE_SUBGROUP 1
+#define USE_SUBGROUP 0
 
 #if USE_SUBGROUP
 #extension GL_KHR_shader_subgroup_ballot	: require
@@ -52,6 +52,9 @@ void main()
 {
 	const uint localThreadId = gl_LocalInvocationID.x;
 	const uint globalThreadId = gl_GlobalInvocationID.x;
+
+	if (globalThreadId >= _View.drawCount)
+		return;
 
 	const MeshDraw meshDraw = draws[globalThreadId];
 	const mat4 worldMatrix = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);

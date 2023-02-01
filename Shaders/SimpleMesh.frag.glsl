@@ -5,6 +5,15 @@
 
 #define USE_PER_PRIMITIVE 0
 
+// >> Debug
+#define OVERDRAW_COLOR vec4(0.1, 0.1, 0.1, 1.0)
+#define DEBUG_MODE_NORMAL 1
+#define DEBUG_MODE_UV 2
+#define DEBUG_MODE_OVERDARW 3
+
+#define DEBUG_MODE DEBUG_MODE_NORMAL
+
+
 #if USE_PER_PRIMITIVE
 #extension GL_NV_mesh_shader : require
 #endif
@@ -20,5 +29,17 @@ layout (location = 0) out vec4 outColor;
 
 void main()
 {
+#if DEBUG_MODE == DEBUG_MODE_NORMAL
     outColor = vec4(normal * 0.5 + 0.5, 1.0) * _View.debugValue;
+
+#elif DEBUG_MODE == DEBUG_MODE_UV
+    outColor = vec4(uv, 0, 1);
+    
+#elif DEBUG_MODE == DEBUG_MODE_OVERDARW
+    outColor = OVERDRAW_COLOR;
+
+#else
+    // TODO: 
+    outColor = (0, 0, 0, 1);
+#endif
 }

@@ -20,6 +20,7 @@ layout (push_constant) uniform Constants
 	vec2 viewportMaxBoundUV;
 } _Constants;
 
+// Combined image sampler
 layout (binding = 0) uniform sampler2D inputImage;
 
 layout (binding = 1) uniform writeonly image2D outputImage;

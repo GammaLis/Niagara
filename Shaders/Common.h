@@ -9,6 +9,7 @@ layout (set = 0, binding = 6) uniform ViewUniformBufferParameters
     vec4 frustumPlanes[6];
     vec4 debugValue;
     vec3 camPos;
+    uint drawCount;
 } _View;
 
 #ifndef EPS 
