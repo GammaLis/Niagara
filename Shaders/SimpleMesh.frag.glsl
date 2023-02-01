@@ -1,9 +1,9 @@
 #version 450
 
+#define USE_PER_PRIMITIVE 0
+
 #extension GL_GOOGLE_include_directive  : require
 #include "Common.h"
-
-#define USE_PER_PRIMITIVE 0
 
 // >> Debug
 #define OVERDRAW_COLOR vec4(0.1, 0.1, 0.1, 1.0)

@@ -1,22 +1,14 @@
 #version 450 core
 
-/// Settings
-#ifndef TASK_GROUP_SIZE
-#define TASK_GROUP_SIZE 32
-#endif
+/// Extensions
 
 #define USE_SUBGROUP 1
-#define USE_EXT_MESH_SHADER 1
-
-#define DEBUG 0
-#define CULL 1
-
-/// Extensions
-#extension GL_EXT_mesh_shader	: require
-// #define GL_EXT_mesh_shader 1
 
 #extension GL_GOOGLE_include_directive	: require
 #include "MeshCommon.h"
+
+#extension GL_NV_mesh_shader	: require
+// #define GL_EXT_mesh_shader 1
 
 #if USE_SUBGROUP
 #extension GL_KHR_shader_subgroup_ballot	: require
@@ -24,6 +16,11 @@
 
 #extension GL_ARB_shader_draw_parameters	: require // gl_DrawIDARB
 
+// Settings
+#define GROUP_SIZE 32
+
+#define DEBUG 0
+#define CULL 1
 
 layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {
@@ -50,7 +47,10 @@ layout (std430, binding = DESC_MESHLET_BUFFER) readonly buffer Meshlets
 	Meshlet meshlets[];
 };
 
-taskPayloadSharedEXT TaskPayload payload;
+out taskNV block 
+{
+	uint meshletIndices[GROUP_SIZE];
+};
 
 /**
  * >> MeshOptimizer
@@ -96,44 +96,18 @@ bool ConeCull_BoundingSphere(vec4 cone, vec4 boundingSphere, vec3 camPos)
 shared uint sh_MeshletCount;
 #endif
 
-/**
- 	// workgroup dimensions
-	in    uvec3 gl_NumWorkGroups;
-	const uvec3 gl_WorkGroupSize;
-
-	// workgroup and invocation IDs
-	in uvec3 gl_WorkGroupID;
-	in uvec3 gl_LocalInvocationID;
-	in uvec3 gl_GlobalInvocationID;
-	in uint  gl_LocalInvocationIndex;
- */
-
-/**
- 	void EmitMeshTasksEXT(uint groupCountX,
-                          uint groupCountY,
-                          uint groupCountZ)
-	Defines the grid size of subsequent mesh shader workgroups to generate upon completion of 
-	the task shader invocation group that called this function and exists the shader. These mesh shader workgroups
-	will have access to the data that was written to a variable with the taskPayloadSharedEXT qualifier.
-	The function call implies a `barrier()`. The arguments are taken from the first invocation in each workgroup.
-	Any invocation must call this function exactly once and under uniform control flow, otherwise behavior is undefined,
- */
-
 // Set the number of threads per workgroup (always one-dimensional)
-layout (local_size_x = TASK_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
 	const uint groupId = gl_WorkGroupID.x;
 	const uint localThreadId = gl_LocalInvocationID.x;
-	const uint localThreadIdStart = groupId * TASK_GROUP_SIZE;
+	const uint localThreadIdStart = groupId * GROUP_SIZE;
 
 	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
 	const MeshDraw meshDraw = draws[meshDrawCommand.drawId];
 	
-	const uint meshletOffset = meshDrawCommand.taskOffset;
-	const uint meshletCount = meshDrawCommand.taskCount;
-	const uint meshletMaxIndex = meshletOffset + meshletCount;
-	const uint meshletIndex = localThreadIdStart + localThreadId + meshletOffset;
+	const uint meshletIndex = localThreadIdStart + localThreadId;
 
 	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
@@ -145,7 +119,7 @@ void main()
 
 	bool accept = false;
 
-	// if (meshletIndex < meshletMaxIndex)
+	// if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	{
 		vec4 cone = meshlets[meshletIndex].cone;
 		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
@@ -167,18 +141,13 @@ void main()
 
 	if (accept)
 	{
-		payload.meshletIndices[index] = meshletIndex; // localThreadId
+		meshletIndices[index] = meshletIndex; // localThreadId
 	}
 
 	uint count = subgroupBallotBitCount(ballot);
 
 	if (localThreadId == 0)
-	{
-		uint groupCountX = count;
-      	uint groupCountY = 1;
-      	uint groupCountZ = 1;
-		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
-	}
+		gl_TaskCountNV = count;
 
 #else
 	if (localThreadId == 0)
@@ -187,7 +156,7 @@ void main()
 	// Sync
 	memoryBarrierShared();
 
-	// if (meshletIndex < meshletCount + meshletOffset)
+	// if (meshletIndex < meshDraw.meshletCount + meshDraw.meshletOffset)
 	{
 		vec4 cone = meshlets[meshletIndex].cone;
 		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
@@ -195,7 +164,7 @@ void main()
 		if (!ConeCull(cone, viewDir))
 		{
 			uint index = atomicAdd(sh_MeshletCount, 1);
-			payload.meshletIndices[index] = meshletIndex;
+			meshletIndices[index] = meshletIndex;
 		}
 	}
 	
@@ -203,38 +172,12 @@ void main()
 	memoryBarrierShared();
 
 	if (localThreadId == 0)
-	{
-		uint groupCountX = sh_MeshletCount;
-      	uint groupCountY = 1;
-      	uint groupCountZ = 1;
-		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
-	}
+		gl_TaskCountNV = sh_MeshletCount;
 #endif
 
 #else
-	if (meshletIndex < meshletMaxIndex)
-		payload.meshletIndices[localThreadId] = meshletIndex;
-
+	meshletIndices[localThreadId] = meshletIndex;
 	if (localThreadId == 0)
-	{
-		uint groupCountX = min(TASK_GROUP_SIZE, meshletCount - localThreadIdStart);
-      	uint groupCountY = 1;
-      	uint groupCountZ = 1;
-		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
-	}
+		gl_TaskCountNV = GROUP_SIZE;
 #endif
 }
-
-// https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GLSL_EXT_mesh_shader.txt
-/**
- * Task Processor
- * The task processor is a programmable unit that operates in conjunction with the mesh processsor to 
- * produce a collection of primitives that will be processed by subsequent stages of the graphics pipeline.
- * A task shader has access to many of the same resources as fragment and other shader processors, including 
- * textures, buffers, image variables, and atomic counters. The task shader has no fixed-function inputs 
- * other than variables identifying the specific workgroup and invocation; any vertex attributes or other
- * data required by the task shader must be fetched from memory. The only fixed output of the task shader is
- * a task count, identifying the number of mesh shader workgroups to spawn. The task shader can write addtional
- * outputs to task memory, which can be read by all of the mesh shader workgroups it spawns.
- * A task shader operates on a group of work items called a workgroup.
- */

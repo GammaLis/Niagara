@@ -1,10 +1,20 @@
 #version 450 core
 
+// Settings
+#ifndef MESH_GROUP_SIZE
+#define MESH_GROUP_SIZE 32
+#endif
+
+#define USE_EXT_MESH_SHADER 1
+#define USE_PER_PRIMITIVE 0
+#define DEBUG 0
+
+/// Extensions
+#extension GL_EXT_mesh_shader	: require
+// #define GL_EXT_mesh_shader 1
+
 #extension GL_GOOGLE_include_directive	: require
 #include "MeshCommon.h"
-
-#extension GL_NV_mesh_shader	: require
-// #define GL_EXT_mesh_shader 1
 
 #extension GL_ARB_shader_draw_parameters: require // gl_DrawIDARB
 
@@ -15,13 +25,6 @@
 #extension GL_EXT_shader_explicit_arithmetic_types  : require
 #endif
 #endif
-
-// Settings
-#define GROUP_SIZE 32
-
-#define USE_PER_PRIMITIVE 0
-#define USE_PACKED_PRIMITIVE_INDICES_NV 1
-#define DEBUG 0
 
 layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {
@@ -48,51 +51,14 @@ layout (std430, binding = DESC_MESHLET_DATA_BUFFER) readonly buffer MeshletData
 	uint meshletData[];
 };
 
-in taskNV block
-{
-	uint meshletIndices[GROUP_SIZE];
-};
-
 layout (location = 0) out Interpolant
 {
 	vec3 outNormal;
 	vec2 outUV;
 } OUT[];
 
-#if 0
+taskPayloadSharedEXT TaskPayload payload;
 
-// The actual number of primitives the workgroup outputs (<= max_primitives)
-out uint gl_PrimitiveCountNV;
-// An index buffer, using list type indices (strips are not supported here)
-out uint gl_PrimitiveIndicesNV[]; // [max_primitives * 3 for triangles]
-
-out gl_MeshPerVertexNV {
-	vec4 gl_Position;
-	float gl_PointSize;
-	float gl_ClipDistance[];
-	float gl_CullDistance[];
-} gl_MeshVerticesNV[]; // [max_vertices]
-
-// Define your own vertex output blocks as usual
-out Interpolant {
-	vec2 uv;
-} OUT[]; // [max_vertices]
-
-// Special purpose per-primitive outputs
-perprimitiveNV out gl_MeshPerPrimitiveNV {
- 	int gl_PrimitiveID;
- 	int gl_Layer;
- 	int gl_ViewportIndex;
- 	int gl_ViewportMask[]; // [1]
-} gl_MeshPrimitivesNV[]; // [max_primitives]
-
-A typical mesh shader used to render static triangle data might operate in 3 phases.
-* Fetches vertex position data and local index data of the primitives that the mesh represents.
-* Triangles would be culled and ouptut primitive indices written.
-* Other vertex attribtes of the surviving subset of vertices would be loaded and computed. During this process,
-the invocations would sometimes work on a per-vertex and sometimes on a per-primitive level.
-
-#endif
 
 /**
  * >> GL_EXT_mesh_shader
@@ -115,26 +81,79 @@ the invocations would sometimes work on a per-vertex and sometimes on a per-prim
  * gl_CullPrimitiveEXT
  * gl_DrawID
  *
- * EmitMeshTasksEXT -> OpEmitMeshTasksEXT()
- * SetMeshOutputsEXT -> OpSetMeshOutputsEXT()
+ * EmitMeshTasksEXT
+ * SetMeshOutputsEXT
+ */
+
+/**
+	// workgroup dimensions
+	in    uvec3 gl_NumWorkGroups;
+	const uvec3 gl_WorkGroupSize;
+
+	// workgroup and invocation IDs
+	in uvec3 gl_WorkGroupID;
+	in uvec3 gl_LocalInvocationID;
+	in uvec3 gl_GlobalInvocationID;
+	in uint  gl_LocalInvocationIndex;
+
+	// write only access
+	out uint  gl_PrimitivePointIndicesEXT[];
+	out uvec2 gl_PrimitiveLineIndicesEXT[];
+	out uvec3 gl_PrimitiveTriangleIndicesEXT[];
+
+	// write only access
+	out gl_MeshPerVertexEXT {
+	vec4  gl_Position;
+	float gl_PointSize;
+	float gl_ClipDistance[];
+	float gl_CullDistance[];
+	} gl_MeshVerticesEXT[];
+
+	// write only access
+	perprimitiveEXT out gl_MeshPerPrimitiveEXT {
+	int  gl_PrimitiveID;
+	int  gl_Layer;
+	int  gl_ViewportIndex;
+	bool gl_CullPrimitiveEXT;
+	int  gl_PrimitiveShadingRateEXT;
+	} gl_MeshPrimitivesEXT[];
+
+	* The output variable gl_CullPrimitiveEXT is only available in the
+    mesh language. When set to true, it marks that this primitive should
+    be culled. If not written to, it defaults to false.
+ */
+
+/**
+	void SetMeshOutputsEXT(uint vertexCount,
+                           uint primitiveCount)
+	Sets the actual output size of the primitives and vertices that this mesh shader workgroup will emit upon
+	completion. The vertexCount argument must be less or equal than the provided `max_vertices` identifier and
+	the primitiveCount argument must be less or equal to `max_primitives`.
+
+	void memoryBarrierShared()
+
+	void groupMemoryBarrier()
  */
 
 #if USE_PER_PRIMITIVE
 // layout (location = 2)
-// perprimitiveNV out vec3 triangleNormals[];
+// perprimitiveEXT out vec3 triangleNormals[];
 #endif
 
 
 // Set the number of threads per workgroup (always one-dimensional)
-layout (local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = MESH_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 // Mesh shader
 // The primitive type (points, lines, triangles)
 layout (triangles) out;
+// `gl_PrimitivePointIndicesEXT`	- points
+// `gl_PrimitiveLineIndicesEXT`		- lines
+// `gl_PrimitiveTriangleIndicesEXT`	- triangles
 // Maximum allocation size for each meshlet
 layout (max_vertices = MAX_VERTICES, max_primitives = MAX_PRIMITIVES) out;
 void main()
 {
-	const uint meshletIndex = meshletIndices[gl_WorkGroupID.x];
+	const uint meshletIndex = payload.meshletIndices[gl_WorkGroupID.x];
 	const uint localThreadId = gl_LocalInvocationID.x;
 
 	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
@@ -154,7 +173,7 @@ void main()
 #endif
 
 	// Vertices
-	for (uint i = localThreadId; i < vertexCount; i += GROUP_SIZE)
+	for (uint i = localThreadId; i < vertexCount; i += MESH_GROUP_SIZE)
 	{
 		uint vi = meshletData[vertexOffset + i] + meshDraw.vertexOffset;
 
@@ -165,7 +184,7 @@ void main()
 		vec3 normal = vec3(uint(vertices[vi].nx), uint(vertices[vi].ny), uint(vertices[vi].nz)) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].s, vertices[vi].t);
 
-		gl_MeshVerticesNV[i].gl_Position = position;
+		gl_MeshVerticesEXT[i].gl_Position = position;
 	#if !DEBUG
 		OUT[i].outNormal = normal;
 	#else
@@ -174,28 +193,17 @@ void main()
 		OUT[i].outUV = texcoord;
 	}
 
-	// SetMeshOutputEXT();
+	SetMeshOutputsEXT(vertexCount, triangleCount);
 
 	// Primitives
-#if USE_PACKED_PRIMITIVE_INDICES_NV
-	uint indexGroupCount = (indexCount + 3) / 4;
-	for (uint i = localThreadId; i < indexGroupCount; i += GROUP_SIZE)
-	{
-		writePackedPrimitiveIndices4x8NV(i * 4, meshletData[indexOffset + i]);
-	}
-
-#else
-	for (uint i = localThreadId; i < triangleCount; i += GROUP_SIZE)
+	for (uint i = localThreadId; i < triangleCount; i += MESH_GROUP_SIZE)
 	{
 		uint indices = meshletData[indexOffset + i];
-		gl_PrimitiveIndicesNV[i * 3 + 0] = indices & 0xFF;
-		gl_PrimitiveIndicesNV[i * 3 + 1] = (indices >>  8) & 0xFF;
-		gl_PrimitiveIndicesNV[i * 3 + 2] = (indices >> 16) & 0xFF;
-	}	
-#endif
+		gl_PrimitiveTriangleIndicesEXT[i] = uvec3(indices & 0xFF, (indices >>  8) & 0xFF, (indices >> 16) & 0xFF);
+	}
 
 #if USE_PER_PRIMITIVE
-	for (uint i = localThreadId; i < triangleCount; i += GROUP_SIZE)
+	for (uint i = localThreadId; i < triangleCount; i += MESH_GROUP_SIZE)
 	{
 	#if 0
 		uint index0 = uint(meshlets[meshletIndex].indices[i * 3 + 0]);
@@ -216,7 +224,25 @@ void main()
 	#endif
 	}
 #endif
-	
-	if (localThreadId == 0)
-		gl_PrimitiveCountNV = uint(triangleCount);
 }
+
+// https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GLSL_EXT_mesh_shader.txt
+/**
+ * Mesh Processor
+ * The mesh processor is a programmable unit that operates in conjunction with the task processor to
+ * produce a collection of primitives that will be processed by subsequent stages of the graphics pipeline.
+ * A mesh shader has access to many of the same resources as fragment and other shader processors, including
+ * textures, buffers, image variables, and atomic counters.  The only inputs available to the mesh shader are
+ * variables identifying the specific workgroup and invocation and any outputs written to task memory by
+ * the task shader that spawned the mesh shader's workgroup. 
+ * A mesh shader operates on a group of work items called a workgroup. An invocation within a workgroup may 
+ * share data with other members of the same workgroup through shared variables and issue memory and control
+ * barriers to synchronize with other members of the same workgroup.
+ */
+
+/**
+ * shared - compute, task and mesh shader only; variable storage is shared across all work items in a local workgrup
+ * taskPayloadSharedEXT - task and mesh shader only; storage that is visible to task shader work items and 
+ the mesh shader work items they spawn and is shared across all work items in a local workgroup
+ * perprimitiveEXT - mesh shader outputs with per-primitive instances
+ */

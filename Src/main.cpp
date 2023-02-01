@@ -47,7 +47,7 @@
 #define USE_MULTI_DRAW_INDIRECT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
-#define USE_PACKED_PRIMITIVE_INDICES_NV 1
+#define USE_PACKED_PRIMITIVE_INDICES_NV 0
 // Mesh shader needs the 8bit_16bit_extension
 
 
@@ -253,19 +253,11 @@ const std::vector<const char*> g_DeviceExtensions =
 {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-	VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-	VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
-	VK_KHR_SPIRV_1_4_EXTENSION_NAME,
-
-	// VK 1.3
-	VK_KHR_MAINTENANCE_4_EXTENSION_NAME,
-
+	
 #if USE_MESHLETS
-	VK_NV_MESH_SHADER_EXTENSION_NAME,
-	// VK_EXT_MESH_SHADER_EXTENSION_NAME
+	// VK_NV_MESH_SHADER_EXTENSION_NAME,
+	VK_EXT_MESH_SHADER_EXTENSION_NAME
 #endif
-
-	VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -432,7 +424,14 @@ struct MeshDrawCommand
 {
 	uint32_t drawId;
 	VkDrawIndexedIndirectCommand drawIndexedIndirectCommand; // 5 uint32_t
+	// Switch from MeshShaderNV to MeshShaderEXT
+#if 0
 	VkDrawMeshTasksIndirectCommandNV drawMeshTaskIndirectCommand; // 2 uint32_t
+#else
+	uint32_t taskOffset;
+	uint32_t taskCount;
+	VkDrawMeshTasksIndirectCommandEXT drawMeshTaskIndirectCommand; // 3 uint32_t
+#endif
 };
 
 
@@ -1185,21 +1184,25 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	
 #if USE_MULTI_DRAW_INDIRECT
 	// vkCmdDrawMeshTasksIndirectNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
-	vkCmdDrawMeshTasksIndirectCountNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+#if 0
+	vkCmdDrawMeshTasksIndirectCountNV (cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+#else
+	vkCmdDrawMeshTasksIndirectCountEXT(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+#endif
 
 #else
 	uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
 	vkCmdDrawMeshTasksNV(cmd, Niagara::DivideAndRoundUp(nTask, 32), 0);
 #endif
 
-#else
+#else // USE_MESHLETS
 	if (ib.size > 0)
 	{
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 #if USE_MULTI_DRAW_INDIRECT
 		// vkCmdDrawIndexedIndirect(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
-		vkCmdDrawIndexedIndirectCountKHR(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+		vkCmdDrawIndexedIndirectCount(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawCountBuffer.buffer, VkDeviceSize(0), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
 
 #else
 		vkCmdDrawIndexed(cmd, ib.elementCount, 1, 0, 0, 0);
@@ -1207,7 +1210,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	}
 	else
 		vkCmdDraw(cmd, vb.elementCount, 1, 0, 0);
-#endif
+#endif // USE_MESHLETS
 
 	g_CommandContext.EndRenderPass(cmd);
 
@@ -1859,50 +1862,48 @@ int main()
 
 	// Device extensions
 	void* pNextChain = nullptr;
-
 	void** pNext = &pNextChain;
 
+	VkPhysicalDeviceVulkan13Features features13{};
+	features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+	features13.maintenance4 = VK_TRUE;
+
+	VkPhysicalDeviceVulkan12Features features12{};
+	features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+	features12.drawIndirectCount = VK_TRUE;
+	features12.storageBuffer8BitAccess = VK_TRUE;
+	features12.uniformAndStorageBuffer8BitAccess = VK_TRUE;
+	features12.storagePushConstant8 = VK_TRUE;
+	features12.shaderFloat16 = VK_TRUE;
+	features12.shaderInt8 = VK_TRUE;
+	features12.samplerFilterMinmax = VK_TRUE;
+	features12.scalarBlockLayout = VK_TRUE;
+	features12.bufferDeviceAddress = VK_TRUE;
+
+	features13.pNext = &features12;
+
+	VkPhysicalDeviceVulkan11Features features11{};
+	features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+	features11.storageBuffer16BitAccess = VK_TRUE;
+	features11.uniformAndStorageBuffer16BitAccess = VK_TRUE;
+	features11.storagePushConstant16 = VK_TRUE;
+	// TODO: Can not create device if enabled
+	// features11.storageInputOutput16 = VK_TRUE;
+	features11.shaderDrawParameters = VK_TRUE;
+
+	features12.pNext = &features11;
+
+	*pNext = &features13;
+	pNext = &features11.pNext;
+
 #if USE_MESHLETS
-	VkPhysicalDeviceMeshShaderFeaturesNV featureMeshShader{};
-	featureMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV;
+	VkPhysicalDeviceMeshShaderFeaturesEXT featureMeshShader{};
+	featureMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
 	featureMeshShader.meshShader = VK_TRUE;
 	featureMeshShader.taskShader = VK_TRUE;
 
 	*pNext = &featureMeshShader;
 	pNext = &featureMeshShader.pNext;
-#endif
-
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS 
-	VkPhysicalDevice8BitStorageFeatures features8Bit{};
-	features8Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
-	features8Bit.storageBuffer8BitAccess = VK_TRUE;
-
-	VkPhysicalDevice16BitStorageFeatures features16Bit{};
-	features16Bit.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
-	features16Bit.storageBuffer16BitAccess = VK_TRUE;
-
-	features16Bit.pNext = &features8Bit;
-
-	*pNext = &features16Bit;
-	pNext = &features8Bit.pNext;
-#endif
-
-#if USE_DEVICE_MAINTENANCE4_EXTENSIONS
-	VkPhysicalDeviceMaintenance4Features featureMaintenance4{};
-	featureMaintenance4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES;
-	featureMaintenance4.maintenance4 = VK_TRUE;
-
-	*pNext = &featureMaintenance4;
-	pNext = &featureMaintenance4.pNext;
-#endif
-
-#if USE_MULTI_DRAW_INDIRECT
-	VkPhysicalDeviceShaderDrawParametersFeatures featureDrawParams{};
-	featureDrawParams.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
-	featureDrawParams.shaderDrawParameters = VK_TRUE;
-
-	*pNext = &featureDrawParams;
-	pNext = &featureDrawParams.pNext;
 #endif
 
 	Niagara::Device device{};

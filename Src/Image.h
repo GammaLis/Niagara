@@ -31,7 +31,8 @@ namespace Niagara
 		Sampler() = default;
 
 		void Init(const Device &device, VkFilter filter = VK_FILTER_LINEAR, VkSamplerMipmapMode mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR, 
-			VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, float maxAnisotropy = 0, VkCompareOp compareOp = VK_COMPARE_OP_NEVER);
+			VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, float maxAnisotropy = 0, 
+			VkCompareOp compareOp = VK_COMPARE_OP_NEVER, VkSamplerReductionMode reductionMode = VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE);
 		void Destroy(const Device& device);
 
 		VkSampler sampler{ VK_NULL_HANDLE };

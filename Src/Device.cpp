@@ -505,7 +505,7 @@ namespace Niagara
 
 		VkResult result = vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &logicalDevice);
 		if (result != VK_SUCCESS)
-			return result;
+			throw std::runtime_error("Can not create device");
 
 		// Create a default command pool for graphics command buffers
 		commandPool = CreateCommandPool(queueFamilyIndices.graphics);

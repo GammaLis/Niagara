@@ -2,6 +2,7 @@
 #define MESH_COMMON_INCLUDED
 
 #define USE_8BIT_16BIT_EXTENSIONS 1
+// https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GL_EXT_shader_16bit_storage.txt
 
 
 #if USE_8BIT_16BIT_EXTENSIONS
@@ -12,10 +13,17 @@
 
 #include "Common.h"
 
+#ifndef USE_EXT_MESH_SHADER
+#define USE_EXT_MESH_SHADER 1
+#endif
+
 
 #define MAX_VERTICES 64
 #define MAX_PRIMITIVES 84
 #define MAX_LODS 8
+
+#define TASK_GROUP_SIZE 32
+#define MESH_GROUP_SIZE 32
 
 #define DESC_VERTEX_BUFFER 0
 #define DESC_MESH_BUFFER 1
@@ -86,8 +94,24 @@ struct MeshDrawCommand
     int  vertexOffset;
     uint firstInstance;
 
+#if defined(USE_NV_MESH_SHADER)
+    // NV
     uint taskCount;
     uint firstTask;
+
+#elif defined(USE_EXT_MESH_SHADER)
+    // EXT
+    uint taskCount;
+    uint taskOffset;
+    uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+#endif
+};
+
+struct TaskPayload
+{
+	uint meshletIndices[TASK_GROUP_SIZE];
 };
 
 

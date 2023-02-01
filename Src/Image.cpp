@@ -46,7 +46,7 @@ namespace Niagara
 
 	/// Sampler
 
-	void Sampler::Init(const Device& device, VkFilter filter, VkSamplerMipmapMode mipmapMode, VkSamplerAddressMode addressMode, float maxAnisotropy, VkCompareOp compareOp)
+	void Sampler::Init(const Device& device, VkFilter filter, VkSamplerMipmapMode mipmapMode, VkSamplerAddressMode addressMode, float maxAnisotropy, VkCompareOp compareOp, VkSamplerReductionMode reductionMode)
 	{
 		Destroy(device);
 
@@ -66,6 +66,12 @@ namespace Niagara
 		createInfo.minLod = 0.0f;
 		createInfo.maxLod = 16.0f;
 
+		// Reduction mode, eg. min depth pyramid
+		VkSamplerReductionModeCreateInfo reductionModeCreateInfo{};
+		reductionModeCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO;
+		reductionModeCreateInfo.reductionMode = reductionMode;
+		createInfo.pNext = &reductionModeCreateInfo;
+		
 		VK_CHECK(vkCreateSampler(device, &createInfo, nullptr, &sampler));
 		assert(sampler);
 	}

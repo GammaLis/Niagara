@@ -1,17 +1,16 @@
 #version 450
 
+#define USE_SUBGROUP 0
+
+#define GROUP_SIZE 32
+
 #extension GL_GOOGLE_include_directive	: require
 #include "MeshCommon.h"
-
-#define USE_SUBGROUP 0
 
 #if USE_SUBGROUP
 #extension GL_KHR_shader_subgroup_ballot	: require
 #endif
 
-
-#define GROUP_SIZE 32
-#define TASK_GROUP_SIZE 32
 
 layout (binding = 0) readonly buffer Meshes
 {
@@ -107,9 +106,16 @@ void main()
 	    drawCommand.firstIndex = meshLod.indexOffset;
 	    drawCommand.vertexOffset = mesh.vertexOffset;
 	    drawCommand.firstInstance = 0;
-
+	#if defined(USE_NV_MESH_SHADER)
 	    drawCommand.taskCount = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
 	    drawCommand.firstTask = meshLod.meshletOffset / TASK_GROUP_SIZE;
+	#elif defined(USE_EXT_MESH_SHADER)
+		drawCommand.taskOffset  = meshLod.meshletOffset;
+		drawCommand.taskCount 	= meshLod.meshletCount;
+		drawCommand.groupCountX = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
+		drawCommand.groupCountY = 1;
+		drawCommand.groupCountZ = 1;
+	#endif
 
 	    drawCommands[drawIndex] = drawCommand;
 	}	

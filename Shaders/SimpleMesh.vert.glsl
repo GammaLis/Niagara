@@ -1,21 +1,13 @@
 #version 450 core
 
 #extension GL_GOOGLE_include_directive  : require
-#include "Common.h"
+#include "MeshCommon.h"
+
+#extension GL_ARB_shader_draw_parameters    : require // gl_DrawIDARB
+
 
 #define VERTEX_INPUT_MODE 1
 #define VERTEX_ALIGNMENT 1
-#define USE_8BIT_16BIT_EXTENSIONS 1
-// https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GL_EXT_shader_16bit_storage.txt
-
-#if USE_8BIT_16BIT_EXTENSIONS
-#extension GL_EXT_shader_16bit_storage  : require
-#extension GL_EXT_shader_8bit_storage   : require
-#extension GL_EXT_shader_explicit_arithmetic_types  : require
-// #extension GL_KHR_shader_explicit_arithmetic_types  : require
-#endif
-
-#extension GL_ARB_shader_draw_parameters    : require // gl_DrawIDARB
 
 
 #if 0
@@ -25,13 +17,10 @@ layout (binding = 0) uniform ObjectUniformBuffer
 };
 #endif
 
-#define MAX_LODS 8
 
-
-#if VERTEX_INPUT_MODE == 1
+#if !VERTEX_ALIGNMENT
 struct Vertex
 {
-#if !VERTEX_ALIGNMENT
 
     vec3 position;
 #if USE_8BIT_16BIT_EXTENSIONS
@@ -43,72 +32,23 @@ struct Vertex
     vec2 texcoord0;
 #endif
 
-#else
-
-    float px, py, pz;
-#if USE_8BIT_16BIT_EXTENSIONS
-    // float16_t px, py, pz;
-    uint8_t nx, ny, nz, nw;
-    float16_t s, t;
-#else
-    float nx, ny, nz;
-    float s, t;
+};
 #endif
 
-#endif
-};
+#if VERTEX_INPUT_MODE == 1
 
-struct MeshLod
-{
-    uint indexOffset;
-    uint indexCount;
-    uint meshletOffset;
-    uint meshletCount;
-};
 
-struct Mesh
-{
-    vec4 boundingSphere;
-    int  vertexOffset;
-    uint lodCount;
-    MeshLod lods[MAX_LODS];
-};
-
-struct MeshDraw
-{
-    vec4 worldMatRow0;
-    vec4 worldMatRow1;
-    vec4 worldMatRow2;
-
-    uint meshIndex;
-    int  vertexOffset;  
-};
-
-struct MeshDrawCommand
-{
-    uint drawId;
-
-    uint indexCount;
-    uint instanceCount;
-    uint firstIndex;
-    int  vertexOffset;
-    uint firstInstance;
-
-    uint taskCount;
-    uint firstTask;
-};
-
-layout (std430, binding = 0) readonly buffer Vertices
+layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {
     Vertex vertices[];
 };
 
-layout (std430, binding = 2) readonly buffer Draws
+layout (std430, binding = DESC_DRAW_DATA_BUFFER) readonly buffer Draws
 {
     MeshDraw draws[];
 };
 
-layout (std430, binding = 3) readonly buffer DrawCommands
+layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) readonly buffer DrawCommands
 {
     MeshDrawCommand drawCommands[];
 };

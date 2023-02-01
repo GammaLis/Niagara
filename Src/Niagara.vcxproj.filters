@@ -292,16 +292,16 @@
     <CustomBuild Include="..\Shaders\SimpleMesh.vert.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
-    <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
+    <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\HiZBuild.comp.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
     <CustomBuild Include="..\Shaders\SimpleMesh.task.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
-    <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
-      <Filter>Shaders</Filter>
-    </CustomBuild>
-    <CustomBuild Include="..\Shaders\HiZBuild.comp.glsl">
+    <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
   </ItemGroup>

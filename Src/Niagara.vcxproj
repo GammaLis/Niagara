@@ -235,6 +235,9 @@
     <ClInclude Include="Utilities.h" />
     <ClInclude Include="VkCommon.h" />
     <ClInclude Include="VkInitializers.h" />
+    <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
     <CustomBuild Include="..\Shaders\SimpleMesh.task.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
@@ -252,11 +255,6 @@
       <FileType>Document</FileType>
     </CustomBuild>
     <CustomBuild Include="..\Shaders\SimpleMesh.vert.glsl">
-      <FileType>Document</FileType>
-    </CustomBuild>
-  </ItemGroup>
-  <ItemGroup>
-    <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
   </ItemGroup>
