@@ -2,7 +2,7 @@
 #define MESH_COMMON_INCLUDED
 
 #define USE_8BIT_16BIT_EXTENSIONS 1
-#define USE_PER_PRIMITIVE 0
+
 
 #if USE_8BIT_16BIT_EXTENSIONS
 #extension GL_EXT_shader_16bit_storage  : require

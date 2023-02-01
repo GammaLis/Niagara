@@ -103,12 +103,12 @@ layout (std430, binding = 0) readonly buffer Vertices
     Vertex vertices[];
 };
 
-layout (std430, binding = 2) buffer Draws
+layout (std430, binding = 2) readonly buffer Draws
 {
     MeshDraw draws[];
 };
 
-layout (std430, binding = 3) buffer DrawCommands
+layout (std430, binding = 3) readonly buffer DrawCommands
 {
     MeshDrawCommand drawCommands[];
 };

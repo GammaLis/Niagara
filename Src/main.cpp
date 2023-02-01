@@ -47,6 +47,7 @@
 #define USE_MULTI_DRAW_INDIRECT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
+#define USE_PACKED_PRIMITIVE_INDICES_NV 1
 // Mesh shader needs the 8bit_16bit_extension
 
 
@@ -66,6 +67,7 @@ constexpr float SCENE_RADIUS = 10.0f;
 constexpr float MAX_DRAW_DISTANCE = 10.0f;
 
 const std::string g_ResourcePath = "../Resources/";
+const std::string g_ShaderPath = "./CompiledShaders/";
 VkExtent2D g_ViewportSize{};
 
 GLFWwindow* g_Window = nullptr;
@@ -182,13 +184,13 @@ struct ShaderManager
 
 	void Init(const Niagara::Device& device)
 	{
-		meshTask.Load(device, "./CompiledShaders/SimpleMesh.task.spv");
-		meshMesh.Load(device, "./CompiledShaders/SimpleMesh.mesh.spv");
-		meshVert.Load(device, "./CompiledShaders/SimpleMesh.vert.spv");
-		meshFrag.Load(device, "./CompiledShaders/SimpleMesh.frag.spv");
+		meshTask.Load(device, g_ShaderPath + "SimpleMesh.task.spv");
+		meshMesh.Load(device, g_ShaderPath + "SimpleMesh.mesh.spv");
+		meshVert.Load(device, g_ShaderPath + "SimpleMesh.vert.spv");
+		meshFrag.Load(device, g_ShaderPath + "SimpleMesh.frag.spv");
 
-		cullComp.Load(device, "./CompiledShaders/DrawCommand.comp.spv");
-		buildHiZComp.Load(device, "./CompiledShaders/HiZBuild.comp.spv");
+		cullComp.Load(device, g_ShaderPath + "DrawCommand.comp.spv");
+		buildHiZComp.Load(device, g_ShaderPath + "HiZBuild.comp.spv");
 	}
 
 	void Cleanup(const Niagara::Device& device)
@@ -1533,14 +1535,19 @@ size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, c
 	optMeshlets.resize(meshletCount);
 
 	// Append meshlet data
-	uint32_t vertexCount = 0, indexGroupCount = 0;
+	uint32_t vertexCount = 0, triangleCount = 0, indexGroupCount = 0;
 	for (const auto& optMeshlet : optMeshlets)
 	{
 		vertexCount += optMeshlet.vertex_count;
+		triangleCount += optMeshlet.triangle_count;
 		indexGroupCount += Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
 	}
 	uint32_t meshletDataOffset = static_cast<uint32_t>(result.meshletData.size());
+#if USE_PACKED_PRIMITIVE_INDICES_NV
 	result.meshletData.insert(result.meshletData.end(), vertexCount + indexGroupCount, 0);
+#else
+	result.meshletData.insert(result.meshletData.end(), vertexCount + triangleCount, 0);
+#endif
 
 	uint32_t meshletOffset = static_cast<uint32_t>(result.meshlets.size());
 	result.meshlets.insert(result.meshlets.end(), meshletCount, {});
@@ -1571,6 +1578,7 @@ size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, c
 
 		meshletDataOffset += optMeshlet.vertex_count;
 
+#if USE_PACKED_PRIMITIVE_INDICES_NV
 		// Triangle indices (packed in 4 bytes)
 		const uint32_t* indexGroups = reinterpret_cast<uint32_t*>(&meshlet_triangles[optMeshlet.triangle_offset]);
 		uint32_t indexGroupCount = Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
@@ -1578,6 +1586,16 @@ size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, c
 			result.meshletData[meshletDataOffset + j] = indexGroups[j];
 
 		meshletDataOffset += indexGroupCount;
+
+#else
+		const uint8_t *indices = &meshlet_triangles[optMeshlet.triangle_offset];
+		uint32_t triangleCount = optMeshlet.triangle_count;
+		for (uint32_t j = 0; j < triangleCount; j++)
+			result.meshletData[meshletDataOffset + j] = indices[j*3+0] | (indices[j*3+1] << 8) | (indices[j*3+2] << 16);
+
+		meshletDataOffset += triangleCount;
+
+#endif
 	}
 
 	// Padding

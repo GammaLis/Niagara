@@ -19,29 +19,31 @@
 // Settings
 #define GROUP_SIZE 32
 
+#define USE_PER_PRIMITIVE 0
+#define USE_PACKED_PRIMITIVE_INDICES_NV 1
 #define DEBUG 0
 
-layout (std430, binding = DESC_VERTEX_BUFFER) buffer Vertices
+layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {
 	Vertex vertices[];
 };
 
-layout (std430, binding = DESC_DRAW_DATA_BUFFER) buffer Draws
+layout (std430, binding = DESC_DRAW_DATA_BUFFER) readonly buffer Draws
 {
 	MeshDraw draws[];
 };
 
-layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) buffer DrawCommands
+layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) readonly buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
 };
 
-layout (std430, binding = DESC_MESHLET_BUFFER) buffer Meshlets
+layout (std430, binding = DESC_MESHLET_BUFFER) readonly buffer Meshlets
 {
 	Meshlet meshlets[];
 };
 
-layout (std430, binding = DESC_MESHLET_DATA_BUFFER) buffer MeshletData
+layout (std430, binding = DESC_MESHLET_DATA_BUFFER) readonly buffer MeshletData
 {
 	uint meshletData[];
 };
@@ -84,35 +86,42 @@ perprimitiveNV out gl_MeshPerPrimitiveNV {
  	int gl_ViewportMask[]; // [1]
 } gl_MeshPrimitivesNV[]; // [max_primitives]
 
+A typical mesh shader used to render static triangle data might operate in 3 phases.
+* Fetches vertex position data and local index data of the primitives that the mesh represents.
+* Triangles would be culled and ouptut primitive indices written.
+* Other vertex attribtes of the surviving subset of vertices would be loaded and computed. During this process,
+the invocations would sometimes work on a per-vertex and sometimes on a per-primitive level.
+
 #endif
 
 /**
- * gl_NumWorkGroups -> NumWorkgroups decorated OpVariable (existing)
- * gl_WorkGroupSize -> WorkgroupSize decorated OpVariable (existing)
- * gl_WorkGroupID -> WorkgroupId decorated OpVariable (existing)
- * gl_LocalInvocationID -> LocalInvocationId decorated OpVariable (existing)
- * gl_GlobalInvocationID -> GlobalInvocationId decorated OpVariable (existing)
- * gl_LocalInvocationIndex -> LocalInvocationIndex decorated OpVariable (existing)
- * gl_PrimitivePointIndicesEXT -> PrimitivePointIndicesEXT decorated OpVariable
- * gl_PrimitiveLineIndicesEXT -> PrimitiveLineIndicesEXT decorated OpVariable
- * gl_PrimitiveTriangleIndicesEXT -> PrimitiveTriangleIndicesEXT decorated OpVariable
- * gl_Position -> Position decorated OpVariable (existing)
- * gl_PointSize -> PointSize decorated OpVariable (existing)
- * gl_ClipDistance -> ClipDistance decorated OpVariable (existing)
- * gl_CullDistance -> CullDistance decorated OpVariable (existing)
- * gl_PrimitiveID -> PrimitiveId decorated OpVariable (existing)
- * gl_Layer -> Layer decorated OpVariable (existing)
- * gl_ViewportIndex -> ViewportIndex decorated OpVariable (existing)
- * gl_CullPrimitiveEXT -> CullPrimitiveEXT decorated OpVariable
- * gl_DrawID -> DrawIndex decorated OpVariable (existing 1.3, extension)
+ * >> GL_EXT_mesh_shader
+ * gl_NumWorkGroups
+ * gl_WorkGroupSize
+ * gl_WorkGroupID
+ * gl_LocalInvocationID
+ * gl_GlobalInvocationID
+ * gl_LocalInvocationIndex
+ * gl_PrimitivePointIndicesEXT
+ * gl_PrimitiveLineIndicesEXT
+ * gl_PrimitiveTriangleIndicesEXT
+ * gl_Position
+ * gl_PointSize
+ * gl_ClipDistance
+ * gl_CullDistance
+ * gl_PrimitiveID
+ * gl_Layer
+ * gl_ViewportIndex
+ * gl_CullPrimitiveEXT
+ * gl_DrawID
  *
  * EmitMeshTasksEXT -> OpEmitMeshTasksEXT()
  * SetMeshOutputsEXT -> OpSetMeshOutputsEXT()
  */
 
 #if USE_PER_PRIMITIVE
-layout (location = 2)
-perprimitiveNV out vec3 triangleNormals[];
+// layout (location = 2)
+// perprimitiveNV out vec3 triangleNormals[];
 #endif
 
 
@@ -140,7 +149,9 @@ void main()
 	const uint vertexOffset = meshlets[meshletIndex].vertexOffset;
 	const uint indexOffset = vertexOffset + vertexCount;
 
+#if DEBUG
 	vec3 meshletColor = IntToColor(meshletIndex);
+#endif
 
 	// Vertices
 	for (uint i = localThreadId; i < vertexCount; i += GROUP_SIZE)
@@ -166,23 +177,27 @@ void main()
 	// SetMeshOutputEXT();
 
 	// Primitives
-#if 0
-	for (uint i = localThreadId; i < indexCount; i += GROUP_SIZE)
-	{
-		gl_PrimitiveIndicesNV[i] = meshlets[meshletIndex].indices[i];
-	}
-#else
+#if USE_PACKED_PRIMITIVE_INDICES_NV
 	uint indexGroupCount = (indexCount + 3) / 4;
 	for (uint i = localThreadId; i < indexGroupCount; i += GROUP_SIZE)
 	{
 		writePackedPrimitiveIndices4x8NV(i * 4, meshletData[indexOffset + i]);
 	}
-	
+
+#else
+	for (uint i = localThreadId; i < triangleCount; i += GROUP_SIZE)
+	{
+		uint indices = meshletData[indexOffset + i];
+		gl_PrimitiveIndicesNV[i * 3 + 0] = indices & 0xFF;
+		gl_PrimitiveIndicesNV[i * 3 + 1] = (indices >>  8) & 0xFF;
+		gl_PrimitiveIndicesNV[i * 3 + 2] = (indices >> 16) & 0xFF;
+	}	
 #endif
 
 #if USE_PER_PRIMITIVE
 	for (uint i = localThreadId; i < triangleCount; i += GROUP_SIZE)
 	{
+	#if 0
 		uint index0 = uint(meshlets[meshletIndex].indices[i * 3 + 0]);
 		uint index1 = uint(meshlets[meshletIndex].indices[i * 3 + 1]);
 		uint index2 = uint(meshlets[meshletIndex].indices[i * 3 + 2]);
@@ -198,9 +213,10 @@ void main()
 		vec3 n = normalize(cross(p1 - p0, p2 - p0));
 
 		triangleNormals[i] = n;
+	#endif
 	}
 #endif
 	
 	if (localThreadId == 0)
-	gl_PrimitiveCountNV = uint(meshlets[meshletIndex].triangleCount);
+		gl_PrimitiveCountNV = uint(triangleCount);
 }

@@ -22,27 +22,27 @@
 #define DEBUG 0
 #define CULL 1
 
-layout (std430, binding = DESC_VERTEX_BUFFER) buffer Vertices
+layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {
 	Vertex vertices[];
 };
 
-layout (std430, binding = DESC_MESH_BUFFER) buffer Meshes
+layout (std430, binding = DESC_MESH_BUFFER) readonly buffer Meshes
 {
 	Mesh meshes[];
 };
 
-layout (std430, binding = DESC_DRAW_DATA_BUFFER) buffer Draws
+layout (std430, binding = DESC_DRAW_DATA_BUFFER) readonly buffer Draws
 {
 	MeshDraw draws[];
 };
 
-layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) buffer DrawCommands
+layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) readonly buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
 };
 
-layout (std430, binding = DESC_MESHLET_BUFFER) buffer Meshlets
+layout (std430, binding = DESC_MESHLET_BUFFER) readonly buffer Meshlets
 {
 	Meshlet meshlets[];
 };
