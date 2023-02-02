@@ -32,15 +32,22 @@ layout (binding = 3) buffer DrawCommandCount
 	uint drawCommandCount;
 };
 
+// View space frustum calling
 bool FrustumCull(vec4 boundingSphere)
 {
 	bool bVisible = true;
-	for (uint i = 0; i < 6; ++i)
+#if 0
+	for (uint i = 0; i < 4; ++i)
 	{
 		bVisible = dot(_View.frustumPlanes[i], vec4(boundingSphere.xyz, 1.0)) < boundingSphere.w;
 		if (!bVisible)
 			break;
 	}
+#else
+	bVisible = 			   abs(boundingSphere.x) * _View.frustumValues.x + boundingSphere.z * _View.frustumValues.y < boundingSphere.w;
+	bVisible = bVisible && abs(boundingSphere.y) * _View.frustumValues.z + boundingSphere.z * _View.frustumValues.w < boundingSphere.w;
+	bVisible = bVisible && (-boundingSphere.z + boundingSphere.w > _View.zNearFar.x) && (-boundingSphere.z - boundingSphere.w < _View.zNearFar.y);
+#endif
 
 	return bVisible;
 }

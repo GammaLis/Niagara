@@ -7,6 +7,8 @@ layout (set = 0, binding = 6) uniform ViewUniformBufferParameters
     mat4 viewMatrix;
     mat4 projMatrix;
     vec4 frustumPlanes[6];
+    vec4 frustumValues; // X L/R plane -> (+/-X, 0, Z, 0), Y U/D plane -> (0, +/-Y, Z, 0)
+    vec4 zNearFar; // x - near, y - far, zw - not used
     vec4 viewportRect;
     vec4 debugValue;
     vec3 camPos;

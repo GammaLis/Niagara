@@ -3,6 +3,10 @@
 #pragma once
 
 #include "pch.h"
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_XYZW_ONLY
 #include <glm/glm.hpp>
 
 
@@ -114,7 +118,7 @@ namespace Niagara
 			0.0f, 0.0f, zNear,  0.0f);
 	}
 
-	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ = true);
+	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ = true, bool needZPlanes = true);
 
 	/// Miscs
 

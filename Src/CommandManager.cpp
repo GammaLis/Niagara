@@ -1,5 +1,6 @@
 #include "CommandManager.h"
 #include "Device.h"
+#include "Image.h"
 
 namespace Niagara
 {
@@ -245,5 +246,177 @@ namespace Niagara
 				vkCmdPushConstants(cmd, cachedPipeline->layout, iter->second.stages, offset, size, pValues);
 			}
 		}
+	}
+
+	void CommandContext::ImageBarrier(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask)
+	{
+		assert(activeImageMemoryBarriers < s_MaxBarrierNum);
+
+		auto& barrier = cachedImageMemoryBarriers[activeImageMemoryBarriers++];
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.image = image;
+		barrier.subresourceRange = { aspectFlags, 0, 1, 0, 1 };
+		barrier.oldLayout = oldLayout;
+		barrier.newLayout = newLayout;
+		barrier.srcAccessMask = srcAccessMask;
+		barrier.dstAccessMask = dstAccessMask;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::ImageBarrier(VkImage image, const VkImageSubresourceRange& subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask)
+	{
+		assert(activeImageMemoryBarriers < s_MaxBarrierNum);
+
+		auto& barrier = cachedImageMemoryBarriers[activeImageMemoryBarriers++];
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.image = image;
+		barrier.subresourceRange = subresourceRange;
+		barrier.oldLayout = oldLayout;
+		barrier.newLayout = newLayout;
+		barrier.srcAccessMask = srcAccessMask;
+		barrier.dstAccessMask = dstAccessMask;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::BufferBarrier(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask)
+	{
+		assert(activeBufferMemoryBarriers < s_MaxBarrierNum);
+
+		auto& barrier = cachedBufferMemoryBarriers[activeBufferMemoryBarriers++];
+		barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+		barrier.buffer = buffer;
+		barrier.size = size;
+		barrier.offset = offset;
+		barrier.srcAccessMask = srcAccessMask;
+		barrier.dstAccessMask = dstAccessMask;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::PipelineBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask)
+	{
+		if (activeBufferMemoryBarriers > 0 || activeImageMemoryBarriers > 0)
+		{
+			const auto pBufferMemoryBarriers = activeBufferMemoryBarriers > 0 ? cachedBufferMemoryBarriers : nullptr;
+			const auto pImageMemoryBarriers = activeImageMemoryBarriers > 0 ? cachedImageMemoryBarriers : nullptr;
+
+			vkCmdPipelineBarrier(cmd, srcMask, dstMask, 0,
+				0, nullptr,
+				activeBufferMemoryBarriers, pBufferMemoryBarriers,
+				activeImageMemoryBarriers, pImageMemoryBarriers);
+
+			activeBufferMemoryBarriers = 0;
+			activeImageMemoryBarriers = 0;
+		}
+	}
+
+	void CommandContext::ImageBarrier2(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+	{
+		assert(activeImageMemoryBarriers2 < s_MaxBarrierNum);
+
+		auto& barrier2 = cachedImageMemoryBarriers2[activeImageMemoryBarriers2++];
+		barrier2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		barrier2.image = image;
+		barrier2.subresourceRange = { aspectFlags, 0, 1, 0, 1 };
+		barrier2.oldLayout = oldLayout;
+		barrier2.newLayout = newLayout;
+		barrier2.srcAccessMask = srcAccessMask;
+		barrier2.dstAccessMask = dstAccessMask;
+		barrier2.srcStageMask = srcStageMask;
+		barrier2.dstStageMask = dstStageMask;
+		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::ImageBarrier2(VkImage image, const VkImageSubresourceRange& subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+	{
+		assert(activeImageMemoryBarriers2 < s_MaxBarrierNum);
+
+		auto& barrier2 = cachedImageMemoryBarriers2[activeImageMemoryBarriers2++];
+		barrier2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		barrier2.image = image;
+		barrier2.subresourceRange = subresourceRange;
+		barrier2.oldLayout = oldLayout;
+		barrier2.newLayout = newLayout;
+		barrier2.srcAccessMask = srcAccessMask;
+		barrier2.dstAccessMask = dstAccessMask;
+		barrier2.srcStageMask = srcStageMask;
+		barrier2.dstStageMask = dstStageMask;
+		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::BufferBarrier2(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+	{
+		assert(activeBufferMemoryBarriers2 < s_MaxBarrierNum);
+
+		auto& barrier2 = cachedBufferMemoryBarriers2[activeBufferMemoryBarriers2++];
+		barrier2.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+		barrier2.buffer = buffer;
+		barrier2.size = size;
+		barrier2.offset = offset;
+		barrier2.srcAccessMask = srcAccessMask;
+		barrier2.dstAccessMask = dstAccessMask;
+		barrier2.srcStageMask = srcStageMask;
+		barrier2.dstStageMask = dstStageMask;
+		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::PipelineBarriers2(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask)
+	{
+		if (activeBufferMemoryBarriers2 > 0 || activeImageMemoryBarriers2 > 0)
+		{
+			const auto pBufferMemoryBarriers2 = activeBufferMemoryBarriers2 > 0 ? cachedBufferMemoryBarriers2 : nullptr;
+			const auto pImageMemoryBarriers2 = activeImageMemoryBarriers2 > 0 ? cachedImageMemoryBarriers2 : nullptr;
+
+			VkDependencyInfo dependencyInfo{};
+			dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			
+			dependencyInfo.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+			dependencyInfo.bufferMemoryBarrierCount = activeBufferMemoryBarriers2;
+			dependencyInfo.pBufferMemoryBarriers = pBufferMemoryBarriers2;
+			dependencyInfo.imageMemoryBarrierCount = activeImageMemoryBarriers2;
+			dependencyInfo.pImageMemoryBarriers = pImageMemoryBarriers2;
+
+			vkCmdPipelineBarrier2(cmd, &dependencyInfo);
+
+			activeBufferMemoryBarriers2 = 0;
+			activeImageMemoryBarriers2 = 0;
+		}
+	}
+
+	void CommandContext::Blit(VkCommandBuffer cmd, const Image& srcImage, const Image& dstImage, uint32_t srcMipLevel, uint32_t dstMipLevel)
+	{
+		VkImageBlit blit{ };
+		blit.srcOffsets[0] = VkOffset3D{ 0, 0, 0 };
+		blit.srcOffsets[1] = VkOffset3D{ (int32_t)srcImage.extent.width, (int32_t)srcImage.extent.height, 1 };
+		blit.srcSubresource = { srcImage.subresource.aspectMask, srcMipLevel, 0, 1 };
+		blit.dstOffsets[0] = VkOffset3D{ 0, 0, 0 };
+		blit.dstOffsets[1] = VkOffset3D{ (int32_t)dstImage.extent.width, (int32_t)dstImage.extent.height, 1 };
+		blit.dstSubresource = { dstImage.subresource.aspectMask, dstMipLevel, 0, 1 };
+
+		vkCmdBlitImage(cmd,
+			srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1, &blit, VK_FILTER_LINEAR);
+	}
+
+	void CommandContext::Blit(VkCommandBuffer cmd, VkImage srcImage, VkImage dstImage, VkRect2D srcRegion, VkRect2D dstRegion, uint32_t srcMipLevel, uint32_t dstMipLevel)
+	{
+		VkImageBlit blit{ };
+		blit.srcOffsets[0] = VkOffset3D{ srcRegion.offset.x, srcRegion.offset.y, 0 };
+		blit.srcOffsets[1] = VkOffset3D{ srcRegion.offset.x + (int32_t)srcRegion.extent.width, srcRegion.offset.y + (int32_t)srcRegion.extent.height, 1 };
+		blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, srcMipLevel, 0, 1 };
+		blit.dstOffsets[0] = VkOffset3D{ dstRegion.offset.x, dstRegion.offset.y, 0 };
+		blit.dstOffsets[1] = VkOffset3D{ dstRegion.offset.x + (int32_t)dstRegion.extent.width, dstRegion.offset.y + (int32_t)dstRegion.extent.height, 1 };
+		blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, dstMipLevel, 0, 1 };
+
+		vkCmdBlitImage(cmd,
+			srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1, &blit, VK_FILTER_LINEAR);
 	}
 }

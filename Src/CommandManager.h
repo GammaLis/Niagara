@@ -9,6 +9,7 @@
 namespace Niagara
 {
 	class Device;
+	class Image;
 
 	VkCommandBuffer BeginSingleTimeCommands();
 	void EndSingleTimeCommands(VkCommandBuffer cmd);
@@ -61,6 +62,12 @@ namespace Niagara
 		uint32_t activeImageMemoryBarriers = 0;
 		VkBufferMemoryBarrier cachedBufferMemoryBarriers[s_MaxBarrierNum] = {};
 		uint32_t activeBufferMemoryBarriers = 0;
+
+		// Barriers2
+		VkImageMemoryBarrier2 cachedImageMemoryBarriers2[s_MaxBarrierNum] = {};
+		uint32_t activeImageMemoryBarriers2 = 0;
+		VkBufferMemoryBarrier2 cachedBufferMemoryBarriers2[s_MaxBarrierNum] = {};
+		uint32_t activeBufferMemoryBarriers2 = 0;
 
 		void UpdateDescriptorSetInfo(const Pipeline& pipeline);
 
@@ -136,85 +143,35 @@ namespace Niagara
 
 		void PushConstants(VkCommandBuffer cmd, const std::string &name, uint32_t offset, uint32_t size, void *pValues);
 
-		void ImageBarrier(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT)
-		{
-			assert(activeImageMemoryBarriers < s_MaxBarrierNum);
+		// Barriers
 
-			auto& barrier = cachedImageMemoryBarriers[activeImageMemoryBarriers++];
-			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-			barrier.image = image;
-			barrier.subresourceRange = { aspectFlags, 0, 1, 0, 1 };
-			barrier.oldLayout = oldLayout;
-			barrier.newLayout = newLayout;
-			barrier.srcAccessMask = srcAccessMask;
-			barrier.dstAccessMask = dstAccessMask;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		}
+		void ImageBarrier(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT);
 
-		void ImageBarrier(VkImage image, const VkImageSubresourceRange &subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT)
-		{
-			assert(activeImageMemoryBarriers < s_MaxBarrierNum);
+		void ImageBarrier(VkImage image, const VkImageSubresourceRange& subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT);
 
-			auto& barrier = cachedImageMemoryBarriers[activeImageMemoryBarriers++];
-			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-			barrier.image = image;
-			barrier.subresourceRange = subresourceRange;
-			barrier.oldLayout = oldLayout;
-			barrier.newLayout = newLayout;
-			barrier.srcAccessMask = srcAccessMask;
-			barrier.dstAccessMask = dstAccessMask;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		}
+		void BufferBarrier(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset = 0, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT);
 
-		void BufferBarrier(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset = 0, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT)
-		{
-			assert(activeBufferMemoryBarriers < s_MaxBarrierNum);
+		void PipelineBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask);
 
-			auto& barrier = cachedBufferMemoryBarriers[activeBufferMemoryBarriers++];
-			barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-			barrier.buffer = buffer;
-			barrier.size = size;
-			barrier.offset = offset;
-			barrier.srcAccessMask = srcAccessMask;
-			barrier.dstAccessMask = dstAccessMask;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		}
+		// Barriers2
 
-		void PipelineBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask)
-		{
-			if (activeBufferMemoryBarriers > 0 || activeImageMemoryBarriers > 0)
-			{
-				const auto pBufferMemoryBarriers = activeBufferMemoryBarriers > 0 ? cachedBufferMemoryBarriers : nullptr;
-				const auto pImageMemoryBarriers = activeImageMemoryBarriers > 0 ? cachedImageMemoryBarriers : nullptr;
+		void ImageBarrier2(VkImage image, VkImageAspectFlags aspectFlags, VkImageLayout oldLayout, VkImageLayout newLayout,
+			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
+			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
-				vkCmdPipelineBarrier(cmd, srcMask, dstMask, 0,
-					0, nullptr,
-					activeBufferMemoryBarriers, pBufferMemoryBarriers,
-					activeImageMemoryBarriers, pImageMemoryBarriers);
+		void ImageBarrier2(VkImage image, const VkImageSubresourceRange& subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout,
+			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
+			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
-				activeBufferMemoryBarriers = 0;
-				activeImageMemoryBarriers = 0;
-			}
-		}
+		void BufferBarrier2(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset, 
+			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
+			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
-		void Blit(VkCommandBuffer cmd, VkImage srcImage, VkImage dstImage, VkRect2D srcRegion, VkRect2D dstRegion, uint32_t srcMipLevel = 0, uint32_t dstMipLevel = 0)
-		{
-			VkImageBlit blit{ };
-			blit.srcOffsets[0] = VkOffset3D{ srcRegion.offset.x, srcRegion.offset.y, 0 };
-			blit.srcOffsets[1] = VkOffset3D{ srcRegion.offset.x + (int32_t)srcRegion.extent.width, srcRegion.offset.y + (int32_t)srcRegion.extent.height, 1 };
-			blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, srcMipLevel, 0, 1 };
-			blit.dstOffsets[0] = VkOffset3D{ dstRegion.offset.x, dstRegion.offset.y, 0 };
-			blit.dstOffsets[1] = VkOffset3D{ dstRegion.offset.x + (int32_t)dstRegion.extent.width, dstRegion.offset.y + (int32_t)dstRegion.extent.height, 1 };
-			blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, dstMipLevel, 0, 1 };
+		void PipelineBarriers2(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask);
 
-			vkCmdBlitImage(cmd, 
-				srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-				dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
-				1, &blit, VK_FILTER_LINEAR);
-		}
+		void Blit(VkCommandBuffer cmd, const Image& srcImage, const Image& dstImage, uint32_t srcMipLevel = 0, uint32_t dstMipLevel = 0);
+
+		void Blit(VkCommandBuffer cmd, VkImage srcImage, VkImage dstImage, VkRect2D srcRegion, VkRect2D dstRegion, uint32_t srcMipLevel = 0, uint32_t dstMipLevel = 0);
 
 	};
 

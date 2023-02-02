@@ -21,9 +21,6 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#define GLM_FORCE_XYZW_ONLY
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 
@@ -536,6 +533,8 @@ struct alignas(16) ViewUniformBufferParameters
 	glm::mat4 viewMatrix;
 	glm::mat4 projMatrix;
 	glm::vec4 frustumPlanes[6];
+	glm::vec4 frustumValues; // X L/R plane -> (+/-X, 0, Z, 0), Y U/D plane -> (0, +/-Y, Z, 0)
+	glm::vec4 zNearFar; // x - near, y - far, zw - not used
 	glm::vec4 viewportRect;
 	glm::vec4 debugValue;
 	glm::vec3 camPos;
@@ -1888,6 +1887,7 @@ int main()
 	features13.maintenance4 = VK_TRUE;
 	features13.synchronization2 = VK_TRUE;
 	features13.dynamicRendering = VK_TRUE;
+	features13.synchronization2 = VK_TRUE;
 
 	VkPhysicalDeviceVulkan12Features features12{};
 	features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -2027,6 +2027,7 @@ int main()
 	auto& camera = Niagara::CameraManipulator::Singleton();
 	camera.SetWindowSize((int)swapchain.extent.width, (int)swapchain.extent.height);
 	camera.SetSpeed(0.02f);
+	// Currently the camera far plane is Inf
 	camera.m_ClipPlanes.x = 1.0f;
 	camera.SetCamera( { eye, center, up, glm::radians(90.0f) } );
 	
@@ -2192,7 +2193,13 @@ int main()
 		g_ViewUniformBufferParameters.viewMatrix = camera.GetViewMatrix();
 		g_ViewUniformBufferParameters.projMatrix = camera.GetProjMatrix();
 		g_ViewUniformBufferParameters.camPos = camera.GetCamera().eye;
-		Niagara::GetFrustumPlanes(g_ViewUniformBufferParameters.frustumPlanes, camera.GetProjMatrix(), /* reversedZ = */ true);
+		Niagara::GetFrustumPlanes(g_ViewUniformBufferParameters.frustumPlanes, camera.GetProjMatrix(), /* reversedZ = */ true, /* needZPlanes = */ false);
+		g_ViewUniformBufferParameters.frustumValues = glm::vec4(
+			g_ViewUniformBufferParameters.frustumPlanes[0].x,
+			g_ViewUniformBufferParameters.frustumPlanes[0].z,
+			g_ViewUniformBufferParameters.frustumPlanes[1].y,
+			g_ViewUniformBufferParameters.frustumPlanes[1].z);
+		g_ViewUniformBufferParameters.zNearFar = glm::vec4(camera.m_ClipPlanes.x, MAX_DRAW_DISTANCE, 0, 0);
 		// Max draw distance
 		g_ViewUniformBufferParameters.frustumPlanes[5] = glm::vec4(0, 0, -1, -MAX_DRAW_DISTANCE);
 		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters), 1);

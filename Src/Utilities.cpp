@@ -35,7 +35,7 @@ namespace Niagara
 		return plane / (len < 1e-3 ? 1 : len);
 	}
 
-	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ)
+	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ, bool needZPlanes)
 	{
 		glm::mat4 mt = glm::transpose(matrix);
 
@@ -44,16 +44,19 @@ namespace Niagara
 		frustumPlanes[2] = NormalizePlane(-mt[1] - mt[3]);
 		frustumPlanes[3] = NormalizePlane(+mt[1] - mt[3]);
 
-		if (reversedZ)
+		if (needZPlanes)
 		{
-			frustumPlanes[4] = NormalizePlane(+ mt[2] - mt[3]);
-			frustumPlanes[5] = NormalizePlane(- mt[2]);
+			if (reversedZ)
+			{
+				frustumPlanes[4] = NormalizePlane(+mt[2] - mt[3]);
+				frustumPlanes[5] = NormalizePlane(-mt[2]);
+			}
+			else
+			{
+				frustumPlanes[4] = NormalizePlane(-mt[2]);
+				frustumPlanes[5] = NormalizePlane(+mt[2] - mt[3]);
+			}
 		}
-		else
-		{
-			frustumPlanes[4] = NormalizePlane(-mt[2]);
-			frustumPlanes[5] = NormalizePlane(+mt[2] - mt[3]);
-		}		
 	}
 
 	/// Miscs
