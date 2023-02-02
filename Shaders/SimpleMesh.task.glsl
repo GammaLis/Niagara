@@ -5,7 +5,8 @@
 #define TASK_GROUP_SIZE 32
 #endif
 
-#define USE_SUBGROUP 1
+// TODO: Not used now
+#define USE_SUBGROUP 0
 #define USE_EXT_MESH_SHADER 1
 
 #define DEBUG 0
@@ -139,13 +140,15 @@ void main()
 
 	vec3 viewDir = vec3(0, 0, 1);
 
+	payload.drawId = meshDrawCommand.drawId;
+
 #if CULL
 
 #if USE_SUBGROUP
 
 	bool accept = false;
 
-	// if (meshletIndex < meshletMaxIndex)
+	if (meshletIndex < meshletMaxIndex)
 	{
 		vec4 cone = meshlets[meshletIndex].cone;
 		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
@@ -185,22 +188,37 @@ void main()
 		sh_MeshletCount = 0;
 
 	// Sync
-	memoryBarrierShared();
+	/**
+	 * https://docs.gl/sl4/barrier
+	 * A barrier() affects control flow but only synchronizes memory accesses to shared variables and tessellation control output variables. 
+	 * For other memory accesses, it does not ensure that values written by one invocation prior to a given static instance of barrier() 
+	 * can be safely read by other invocations after their call to the same static instance of barrier(). To achieve this requires the use of
+	 * both barrier() and a memory barrier.
+	 * ==> If you are only using barriers for shared variables, barrier() is sufficient. If you are using them for "other memory accesses", 
+	 * then barrier() is not sufficient.
+	 */
+	barrier(); // memoryBarrierShared();
 
-	// if (meshletIndex < meshletCount + meshletOffset)
+	bool accept = false;
+
+	if (meshletIndex < meshletMaxIndex)
 	{
 		vec4 cone = meshlets[meshletIndex].cone;
 		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
 
-		if (!ConeCull(cone, viewDir))
-		{
-			uint index = atomicAdd(sh_MeshletCount, 1);
-			payload.meshletIndices[index] = meshletIndex;
-		}
+		vec4 boundingSphere = meshlets[meshletIndex].boundingSphere;
+		boundingSphere.xyz = (worldMat * vec4(boundingSphere.xyz, 1.0)).xyz;
+		accept = !ConeCull_BoundingSphere(cone, boundingSphere, _View.camPos);
+	}
+
+	if (accept)
+	{
+		uint index = atomicAdd(sh_MeshletCount, 1);
+		payload.meshletIndices[index] = meshletIndex;
 	}
 	
 	// Sync
-	memoryBarrierShared();
+	barrier(); // memoryBarrierShared();
 
 	if (localThreadId == 0)
 	{

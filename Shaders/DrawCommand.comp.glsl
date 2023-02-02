@@ -96,19 +96,22 @@ void main()
 
 		MeshLod meshLod = mesh.lods[lodIndex];
 		// DEBUG::
-		// MeshLod meshLod = mesh.lods[mesh.lodCount-1];
+		// meshLod = mesh.lods[max(0, int(mesh.lodCount) - 1)];
 		
 		MeshDrawCommand drawCommand;
 
 		drawCommand.drawId = globalThreadId;
+
 		drawCommand.indexCount = meshLod.indexCount;
 	    drawCommand.instanceCount = 1;
 	    drawCommand.firstIndex = meshLod.indexOffset;
 	    drawCommand.vertexOffset = mesh.vertexOffset;
 	    drawCommand.firstInstance = 0;
+
 	#if defined(USE_NV_MESH_SHADER)
 	    drawCommand.taskCount = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
 	    drawCommand.firstTask = meshLod.meshletOffset / TASK_GROUP_SIZE;
+
 	#elif defined(USE_EXT_MESH_SHADER)
 		drawCommand.taskOffset  = meshLod.meshletOffset;
 		drawCommand.taskCount 	= meshLod.meshletCount;

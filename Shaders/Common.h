@@ -7,6 +7,7 @@ layout (set = 0, binding = 6) uniform ViewUniformBufferParameters
     mat4 viewMatrix;
     mat4 projMatrix;
     vec4 frustumPlanes[6];
+    vec4 viewportRect;
     vec4 debugValue;
     vec3 camPos;
     uint drawCount;

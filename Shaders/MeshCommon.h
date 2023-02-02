@@ -88,12 +88,14 @@ struct MeshDrawCommand
 {
 	uint drawId;
 
+	// Used by traditional raster
 	uint indexCount;
     uint instanceCount;
     uint firstIndex;
     int  vertexOffset;
     uint firstInstance;
 
+    // Used by mesh shading path
 #if defined(USE_NV_MESH_SHADER)
     // NV
     uint taskCount;
@@ -101,8 +103,8 @@ struct MeshDrawCommand
 
 #elif defined(USE_EXT_MESH_SHADER)
     // EXT
-    uint taskCount;
     uint taskOffset;
+    uint taskCount;
     uint groupCountX;
 	uint groupCountY;
 	uint groupCountZ;
@@ -111,6 +113,7 @@ struct MeshDrawCommand
 
 struct TaskPayload
 {
+	uint drawId;
 	uint meshletIndices[TASK_GROUP_SIZE];
 };
 

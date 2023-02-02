@@ -44,6 +44,7 @@
 #define VERTEX_INPUT_MODE 1
 #define FLIP_VIEWPORT 1
 #define USE_MESHLETS 1
+#define USE_FRAGMENT_SHADING_RATE 1
 #define USE_MULTI_DRAW_INDIRECT 1
 #define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
 #define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
@@ -62,9 +63,9 @@ constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
 constexpr uint32_t MESH_MAX_LODS = 8;
 
 constexpr uint32_t TASK_GROUP_SIZE = 32;
-constexpr uint32_t DRAW_COUNT = 100;
-constexpr float SCENE_RADIUS = 10.0f;
-constexpr float MAX_DRAW_DISTANCE = 10.0f;
+constexpr uint32_t DRAW_COUNT = 1000;
+constexpr float SCENE_RADIUS = 20.0f;
+constexpr float MAX_DRAW_DISTANCE = 20.0f;
 
 const std::string g_ResourcePath = "../Resources/";
 const std::string g_ShaderPath = "./CompiledShaders/";
@@ -253,6 +254,7 @@ const std::vector<const char*> g_DeviceExtensions =
 {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+	VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
 	
 #if USE_MESHLETS
 	// VK_NV_MESH_SHADER_EXTENSION_NAME,
@@ -534,6 +536,7 @@ struct alignas(16) ViewUniformBufferParameters
 	glm::mat4 viewMatrix;
 	glm::mat4 projMatrix;
 	glm::vec4 frustumPlanes[6];
+	glm::vec4 viewportRect;
 	glm::vec4 debugValue;
 	glm::vec3 camPos;
 	uint32_t drawCount;
@@ -975,6 +978,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 	auto &rasterizationState = pipelineState.rasterizationState;
 	// >>> DEBUG:
 	// rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
+	// rasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
 #if FLIP_VIEWPORT
 	rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 #endif
@@ -1602,12 +1606,14 @@ size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, c
 	}
 
 	// Padding
+#if 0
 	if (meshletCount % TASK_GROUP_SIZE != 0)
 	{
 		size_t paddingCount = TASK_GROUP_SIZE - meshletCount % TASK_GROUP_SIZE;
 		result.meshlets.insert(result.meshlets.end(), paddingCount, {});
 		meshletCount += paddingCount;
 	}
+#endif
 
 	return meshletCount;
 }
@@ -1706,6 +1712,17 @@ bool LoadMesh(Geometry &result, const char* path, bool bBuildMeshlets = true, bo
 			}
 		}
 	}
+
+	// Pad meshlets to TASK_GROUP_SIZE to allow shaders to over-read when running task shaders
+#if 1
+	size_t meshletCount = result.meshlets.size();
+	if (meshletCount % TASK_GROUP_SIZE != 0)
+	{
+		size_t paddingCount = TASK_GROUP_SIZE - meshletCount % TASK_GROUP_SIZE;
+		result.meshlets.insert(result.meshlets.end(), paddingCount, {});
+		meshletCount += paddingCount;
+	}
+#endif
 
 	// TODO: optimize the mesh for more efficient GPU rendering
 	return true;
@@ -1857,8 +1874,10 @@ int main()
 
 	// Device features
 	VkPhysicalDeviceFeatures physicalDeviceFeatures{};
-	physicalDeviceFeatures.multiDrawIndirect = true;
-	physicalDeviceFeatures.samplerAnisotropy = true;
+	physicalDeviceFeatures.multiDrawIndirect = VK_TRUE;
+	physicalDeviceFeatures.samplerAnisotropy = VK_TRUE;
+	physicalDeviceFeatures.shaderInt16 = VK_TRUE;
+	physicalDeviceFeatures.fillModeNonSolid = VK_TRUE;
 
 	// Device extensions
 	void* pNextChain = nullptr;
@@ -1867,6 +1886,8 @@ int main()
 	VkPhysicalDeviceVulkan13Features features13{};
 	features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 	features13.maintenance4 = VK_TRUE;
+	features13.synchronization2 = VK_TRUE;
+	features13.dynamicRendering = VK_TRUE;
 
 	VkPhysicalDeviceVulkan12Features features12{};
 	features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -1904,6 +1925,16 @@ int main()
 
 	*pNext = &featureMeshShader;
 	pNext = &featureMeshShader.pNext;
+#endif
+
+#if USE_FRAGMENT_SHADING_RATE
+	VkPhysicalDeviceFragmentShadingRateFeaturesKHR featureSR{};
+	featureSR.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
+	featureSR.primitiveFragmentShadingRate = VK_TRUE;
+	featureSR.pipelineFragmentShadingRate = VK_TRUE;
+
+	*pNext = &featureSR;
+	pNext = &featureSR.pNext;
 #endif
 
 	Niagara::Device device{};
@@ -2004,7 +2035,8 @@ int main()
 	VkMemoryPropertyFlags deviceLocalMemPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 	
 	// Uniforms
-	g_ViewUniformBufferParameters.debugValue = glm::vec4(0.8, 0.2, 0.2, 1);
+	g_ViewUniformBufferParameters.viewportRect = glm::vec4(0.0f, 0.0f, renderExtent.width, renderExtent.height);
+	g_ViewUniformBufferParameters.debugValue = glm::vec4(1.0f); // glm::vec4(0.8, 0.2, 0.2, 1);
 
 	auto& viewUniformBuffer = g_BufferMgr.viewUniformBuffer;
 	viewUniformBuffer.Init(device, sizeof(ViewUniformBufferParameters), 1, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
@@ -2105,6 +2137,8 @@ int main()
 
 		renderExtent = swapchain.extent;
 		colorFormat = swapchain.colorFormat;
+
+		g_ViewUniformBufferParameters.viewportRect = glm::vec4(0.0f, 0.0f, renderExtent.width, renderExtent.height);
 
 		// recreate view dependent textures
 		g_BufferMgr.InitViewDependentBuffers(device, renderExtent, colorFormat, depthFormat);

@@ -1,3 +1,6 @@
+// Ref: https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_mesh_shader.adoc
+// Ref: https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GLSL_EXT_mesh_shader.txt
+
 #version 450 core
 
 // Settings
@@ -7,7 +10,9 @@
 
 #define USE_EXT_MESH_SHADER 1
 #define USE_PER_PRIMITIVE 0
+
 #define DEBUG 0
+#define CULL 1
 
 /// Extensions
 #extension GL_EXT_mesh_shader	: require
@@ -140,6 +145,10 @@ taskPayloadSharedEXT TaskPayload payload;
 // perprimitiveEXT out vec3 triangleNormals[];
 #endif
 
+#if CULL
+shared vec3 sh_VertexClip[MAX_VERTICES];
+#endif
+
 
 // Set the number of threads per workgroup (always one-dimensional)
 layout (local_size_x = MESH_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
@@ -153,11 +162,16 @@ layout (triangles) out;
 layout (max_vertices = MAX_VERTICES, max_primitives = MAX_PRIMITIVES) out;
 void main()
 {
-	const uint meshletIndex = payload.meshletIndices[gl_WorkGroupID.x];
-	const uint localThreadId = gl_LocalInvocationID.x;
+	const uint localThreadIndex = gl_LocalInvocationIndex;
 
+	const uint meshletIndex = payload.meshletIndices[gl_WorkGroupID.x];
+
+#if 0
 	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
 	const MeshDraw meshDraw = draws[meshDrawCommand.drawId];
+#else
+	const MeshDraw meshDraw = draws[payload.drawId];
+#endif
 
 	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
@@ -172,8 +186,10 @@ void main()
 	vec3 meshletColor = IntToColor(meshletIndex);
 #endif
 
+	SetMeshOutputsEXT(vertexCount, triangleCount);
+
 	// Vertices
-	for (uint i = localThreadId; i < vertexCount; i += MESH_GROUP_SIZE)
+	for (uint i = localThreadIndex; i < vertexCount; i += MESH_GROUP_SIZE)
 	{
 		uint vi = meshletData[vertexOffset + i] + meshDraw.vertexOffset;
 
@@ -191,15 +207,66 @@ void main()
 		OUT[i].outNormal = meshletColor;
 	#endif
 		OUT[i].outUV = texcoord;
+
+	#if CULL
+		sh_VertexClip[i] = vec3(position.xy / position.w, position.w);
+	#endif
 	}
 
-	SetMeshOutputsEXT(vertexCount, triangleCount);
+#if CULL
+	barrier(); // memoryBarrierShared();
+#endif
 
 	// Primitives
-	for (uint i = localThreadId; i < triangleCount; i += MESH_GROUP_SIZE)
+	for (uint i = localThreadIndex; i < triangleCount; i += MESH_GROUP_SIZE)
 	{
 		uint indices = meshletData[indexOffset + i];
-		gl_PrimitiveTriangleIndicesEXT[i] = uvec3(indices & 0xFF, (indices >>  8) & 0xFF, (indices >> 16) & 0xFF);
+		uint i0 = indices & 0xFF, i1 = (indices >>  8) & 0xFF, i2 = (indices >> 16) & 0xFF;
+		gl_PrimitiveTriangleIndicesEXT[i] = uvec3(i0, i1, i2);
+
+	#if CULL
+		bool culled = false;
+
+		vec3 p0 = sh_VertexClip[i0], p1 = sh_VertexClip[i1], p2 = sh_VertexClip[i2];
+
+		vec2 c0 = p0.xy, c1 = p1.xy, c2 = p2.xy;
+
+		// Backfacing culling + small-area culling
+		{
+			vec2 c01 = c1 - c0, c02 = c2 - c0;
+			float area = (c01.x * c02.y - c01.y * c02.x);
+			
+			culled = culled || area <= 0; // 1e-5;
+		}
+
+		// Small primitive culling
+		{
+			vec2 bmin = min(c0, min(c1, c2));
+			vec2 bmax = max(c0, max(c1, c2));
+			
+			bmin = (bmin * 0.5 + 0.5) * _View.viewportRect.zw;
+			bmax = (bmax * 0.5 + 0.5) * _View.viewportRect.zw;
+
+			const float subpixelPrec = 1.0 / 256.0; // this can be set to 1/2^SubpixelPrecisionBits.	512 256
+
+		#if 0
+			// Note: this is slightly imprecise (doesn't fully match hw behavior and is bot too loose and too strict)
+			culled = culled || (round(bmin.x - subpixelPrec) == round(bmax.x + subpixelPrec) || round(bmin.y - subpixelPrec) == round(bmax.y + subpixelPrec));
+		#else
+			// Due to top-left rasterization convention it is probably safe to slightly reduce the tested bbox
+			// https://github.com/zeux/niagara.git # e9f3a890af764d765efd544e243452c380b08d50
+			culled = culled || (round(bmin.x - subpixelPrec) == round(bmax.x) || round(bmin.y) == round(bmax.y + subpixelPrec));
+		#endif
+		}
+
+		// culled = culled || (p0.z < 0 && p1.z < 0 && p2.z < 0);
+
+		// The computations above are only valid if all vertices are in front of perspective plane
+		culled = culled && (p0.z > 0 && p1.z > 0 && p2.z > 0);
+
+		// TODO: Requires fragment shading rate ??? 
+		gl_MeshPrimitivesEXT[i].gl_CullPrimitiveEXT = culled;
+	#endif
 	}
 
 #if USE_PER_PRIMITIVE
