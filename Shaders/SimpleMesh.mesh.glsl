@@ -232,6 +232,7 @@ void main()
 		vec2 c0 = p0.xy, c1 = p1.xy, c2 = p2.xy;
 
 		// Backfacing culling + small-area culling
+		if (_DebugParams.triBackfaceCulling > 0)
 		{
 			vec2 c01 = c1 - c0, c02 = c2 - c0;
 			float area = (c01.x * c02.y - c01.y * c02.x);
@@ -240,6 +241,7 @@ void main()
 		}
 
 		// Small primitive culling
+		if (_DebugParams.triSmallCulling > 0)
 		{
 			vec2 bmin = min(c0, min(c1, c2));
 			vec2 bmax = max(c0, max(c1, c2));

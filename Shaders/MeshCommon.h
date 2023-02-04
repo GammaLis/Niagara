@@ -117,4 +117,36 @@ struct TaskPayload
 	uint meshletIndices[TASK_GROUP_SIZE];
 };
 
+// Deubg
+#if 0
+struct DebugParams
+{
+	// Draw culls
+	uint drawFrustumCulling;
+	uint drawOcclusionCulling;
+	// Meshlet culls
+	uint meshletConeCulling;
+	uint meshletFrustumCulling;
+	uint meshletOcclusionCulling;
+	// Triangel culls
+	uint triBackfaceCulling;
+	uint triSmallCulling;
+};
+
+#else
+layout (push_constant) uniform DebugParams
+{
+	// Draw culls
+	uint drawFrustumCulling;
+	uint drawOcclusionCulling;
+	// Meshlet culls
+	uint meshletConeCulling;
+	uint meshletFrustumCulling;
+	uint meshletOcclusionCulling;
+	// Triangel culls
+	uint triBackfaceCulling;
+	uint triSmallCulling;
+} _DebugParams;
+#endif
+
 #endif // MESH_COMMON_INCLUDED

@@ -129,6 +129,8 @@ namespace Niagara
 
 		Shader() = default;
 
+		operator VkShaderModule() const { return module; }
+
 		bool IsValid() const { return module != VK_NULL_HANDLE; }
 
 		bool Load(const Device &device, const std::string &fileName);

@@ -149,6 +149,121 @@ namespace Niagara
 		cachedCommandBuffer = cmd;
 	}
 
+	void CommandContext::SetAttachments(Attachment* pColorAttachments, uint32_t colorAttachmentCount, LoadStoreInfo* pColorLoadStoreInfos, VkClearColorValue* pClearColorValues,
+		Attachment* pDepthAttachment, LoadStoreInfo* pDepthLoadStoreInfo, VkClearDepthStencilValue* pClearDepthValue)
+	{
+		assert(colorAttachmentCount < s_MaxAttachments);
+
+		activeColorAttachmentCount = colorAttachmentCount;
+
+		if (pColorAttachments != nullptr)
+		{
+			std::copy_n(pColorAttachments, colorAttachmentCount, cachedColorAttachments);
+
+			if (pColorLoadStoreInfos != nullptr)
+				std::copy_n(pColorLoadStoreInfos, colorAttachmentCount, cachedColorLoadStoreInfos);
+
+			if (pClearColorValues != nullptr)
+				for (uint32_t i = 0; i < colorAttachmentCount; ++i)
+					cachedColorClearValues[i].color = pClearColorValues[i];
+			else
+				for (uint32_t i = 0; i < colorAttachmentCount; ++i)
+					cachedColorClearValues[i].color = VkClearColorValue{};
+		}
+
+		if (pDepthAttachment != nullptr)
+		{
+			cachedDepthAttachment = *pDepthAttachment;
+
+			if (pDepthLoadStoreInfo != nullptr)
+				cachedDepthLoadStoreInfo = *pDepthLoadStoreInfo;
+
+			if (pClearDepthValue)
+				cachedDepthClearValue.depthStencil = *pClearDepthValue;
+		}
+		else
+		{
+			cachedDepthAttachment.view = VK_NULL_HANDLE;
+		}
+
+		// TODO:
+		cachedDepthResolve.view = nullptr;
+	}
+
+	void CommandContext::BeginRendering(VkCommandBuffer cmd, const VkRect2D& renderArea)
+	{
+		// Colors
+		std::vector<VkRenderingAttachmentInfo> colorAttachmentInfos;
+
+		if (activeColorAttachmentCount > 0)
+		{
+			colorAttachmentInfos.resize(activeColorAttachmentCount);
+
+			for (uint32_t i = 0; i < activeColorAttachmentCount; ++i)
+			{
+				auto& attachmentInfo = colorAttachmentInfos[i];
+
+				attachmentInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+				attachmentInfo.imageView = cachedColorAttachments[i].view->view;
+				attachmentInfo.imageLayout = cachedColorAttachments[i].layout;
+				attachmentInfo.loadOp = cachedColorLoadStoreInfos[i].loadOp;
+				attachmentInfo.storeOp = cachedColorLoadStoreInfos[i].storeOp;
+				attachmentInfo.clearValue = cachedColorClearValues[i];
+
+				if (activeColorResolveCount > 0)
+				{
+					attachmentInfo.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+					attachmentInfo.resolveImageView = cachedColorResolves[i].view->view;
+					attachmentInfo.resolveImageLayout = cachedColorResolves[i].layout;
+				}
+			}
+		}
+
+		// Depth
+		// A single depth stencil attachment info can be used, but they can also be specified separately.
+		// When both are specified separately, the only requirement is that the image view is identical.
+		VkRenderingAttachmentInfo depthAttachmentInfo{};
+
+		if (cachedDepthAttachment.view != nullptr)
+		{
+			depthAttachmentInfo.imageView = cachedDepthAttachment.view->view;
+			depthAttachmentInfo.imageLayout = cachedDepthAttachment.layout;
+			depthAttachmentInfo.loadOp = cachedDepthLoadStoreInfo.loadOp;
+			depthAttachmentInfo.storeOp = cachedDepthLoadStoreInfo.storeOp;
+			depthAttachmentInfo.clearValue = cachedDepthClearValue;
+
+			if (cachedDepthResolve.view != nullptr)
+			{
+				depthAttachmentInfo.resolveMode = VK_RESOLVE_MODE_MAX_BIT;
+				depthAttachmentInfo.resolveImageView = cachedDepthResolve.view->view;
+				depthAttachmentInfo.resolveImageLayout = cachedDepthResolve.layout;
+			}
+		}
+		
+		VkRenderingInfo renderingInfo{};
+		renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+		renderingInfo.flags = 0;
+		renderingInfo.renderArea = renderArea;
+		renderingInfo.layerCount = 1;
+		renderingInfo.colorAttachmentCount = activeColorAttachmentCount;
+		renderingInfo.pColorAttachments = activeColorAttachmentCount > 0 ? colorAttachmentInfos.data() : nullptr;
+		renderingInfo.pDepthAttachment = depthAttachmentInfo.imageView != VK_NULL_HANDLE ? &depthAttachmentInfo : nullptr;
+		renderingInfo.pStencilAttachment = depthAttachmentInfo.imageView != VK_NULL_HANDLE ? &depthAttachmentInfo : nullptr;
+
+		vkCmdBeginRendering(cmd, &renderingInfo);
+	}
+
+	void CommandContext::EndRendering(VkCommandBuffer cmd)
+	{
+		vkCmdEndRendering(cmd);
+
+		// Clear dynamic rendering caches
+		activeColorAttachmentCount = 0;
+		activeColorResolveCount = 0;
+		cachedDepthAttachment.view = nullptr;
+		cachedDepthResolve.view = nullptr;
+	}
+
 	void CommandContext::BeginRenderPass(VkCommandBuffer cmd, VkRenderPass renderPass, VkFramebuffer framebuffer, const VkRect2D& renderArea, const std::vector<VkClearValue>& clearValues)
 	{
 		VkRenderPassBeginInfo beginInfo{};
@@ -166,6 +281,8 @@ namespace Niagara
 
 	void CommandContext::BindPipeline(VkCommandBuffer cmd, const GraphicsPipeline& pipeline)
 	{
+		assert(pipeline.pipeline);
+
 		if (cachedPipeline == &pipeline)
 			return;
 
@@ -280,7 +397,7 @@ namespace Niagara
 		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	}
 
-	void CommandContext::BufferBarrier(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask)
+	void CommandContext::BufferBarrier(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask)
 	{
 		assert(activeBufferMemoryBarriers < s_MaxBarrierNum);
 
@@ -348,7 +465,7 @@ namespace Niagara
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	}
 
-	void CommandContext::BufferBarrier2(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+	void CommandContext::BufferBarrier2(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
 	{
 		assert(activeBufferMemoryBarriers2 < s_MaxBarrierNum);
 
@@ -365,7 +482,7 @@ namespace Niagara
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	}
 
-	void CommandContext::PipelineBarriers2(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask)
+	void CommandContext::PipelineBarriers2(VkCommandBuffer cmd)
 	{
 		if (activeBufferMemoryBarriers2 > 0 || activeImageMemoryBarriers2 > 0)
 		{

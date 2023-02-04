@@ -19,6 +19,8 @@ namespace Niagara
 		void Init(const Device &device, Image& image, VkImageViewType viewType,
 			uint32_t baseMipLevel = 0, uint32_t baseArrayLayer = 0, uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
 		void Destroy(const Device &device);
+
+		operator VkImageView() const { return view; }
 		
 		VkImageView view{ VK_NULL_HANDLE };
 		VkImageSubresourceRange subresourceRange{};
@@ -34,6 +36,8 @@ namespace Niagara
 			VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, float maxAnisotropy = 0, 
 			VkCompareOp compareOp = VK_COMPARE_OP_NEVER, VkSamplerReductionMode reductionMode = VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE);
 		void Destroy(const Device& device);
+
+		operator VkSampler() const { return sampler; }
 
 		VkSampler sampler{ VK_NULL_HANDLE };
 	};
@@ -64,6 +68,8 @@ namespace Niagara
 			VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL,
 			const uint32_t* queueFamilies = nullptr, uint32_t queueFamilyCount = 0);
 		void Destroy(const Device &device);
+
+		operator VkImage() const { return image; }
 
 		const ImageView& CreateImageView(const Device &device, VkImageViewType viewType, uint32_t baseMipLevel = 0, uint32_t baseArrayLayer = 0, uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
 

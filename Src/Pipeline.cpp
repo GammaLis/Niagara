@@ -198,7 +198,12 @@ namespace Niagara
 
 	std::vector<VkDescriptorSetLayout> Pipeline::CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported) const
 	{
-		std::vector<VkDescriptorSetLayout> setLayouts(setResources.size());
+		std::vector<VkDescriptorSetLayout> setLayouts;
+
+		if (setResources.empty())
+			return setLayouts;
+
+		setLayouts.resize(setResources.size());
 
 		for (const auto &kvp : setResources)
 		{
@@ -390,11 +395,14 @@ namespace Niagara
 
 	void GraphicsPipeline::Init(VkDevice device)
 	{
-		assert(renderPass);
+		assert(renderPass != nullptr || (!colorAttachmentFormats.empty() || depthAttachmentFormat != VK_FORMAT_UNDEFINED));
 
 		Pipeline::Init(device);
 
-		descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, g_PushDescriptorsSupported);
+		if (!setResources.empty())
+			descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, g_PushDescriptorsSupported);
+		else
+			descriptorUpdateTemplate = VK_NULL_HANDLE;
 
 		pipelineState.Update();
 
@@ -411,10 +419,30 @@ namespace Niagara
 		createInfo.pColorBlendState = &pipelineState.colorBlendState; // <--
 		createInfo.pDynamicState = &pipelineState.dynamicState; // <--
 		createInfo.layout = layout;
-		createInfo.renderPass = renderPass->renderPass; // <--
-		createInfo.subpass = subpass; // <--
 		createInfo.basePipelineHandle = VK_NULL_HANDLE;
 		createInfo.basePipelineIndex = -1;
+
+		VkPipelineRenderingCreateInfo renderingCreateInfo{};
+		// Render pass
+		if (renderPass != nullptr)
+		{
+			createInfo.renderPass = renderPass->renderPass; // <--
+			createInfo.subpass = subpass; // <--
+		}
+		else
+		{
+			// No render pass, use dynamic rendering
+			renderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+			renderingCreateInfo.colorAttachmentCount = static_cast<uint32_t>(colorAttachmentFormats.size());
+			renderingCreateInfo.pColorAttachmentFormats = colorAttachmentFormats.data();
+			renderingCreateInfo.depthAttachmentFormat = depthAttachmentFormat;
+			renderingCreateInfo.stencilAttachmentFormat = depthAttachmentFormat;
+
+			createInfo.pNext = &renderingCreateInfo;
+
+			createInfo.renderPass = VK_NULL_HANDLE;
+			createInfo.subpass = 0;
+		}
 
 		pipeline = VK_NULL_HANDLE;
 		VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &createInfo, nullptr, &pipeline));
@@ -424,6 +452,21 @@ namespace Niagara
 	void GraphicsPipeline::Destroy(VkDevice device)
 	{
 		Pipeline::Destroy(device);
+	}
+
+	void GraphicsPipeline::SetAttachments(VkFormat* pColorAttachmentFormats, uint32_t colorAttachmentCount, VkFormat depthAttachmentFormat)
+	{
+		if (colorAttachmentCount > 0)
+		{
+			colorAttachmentFormats.resize(colorAttachmentCount);
+			std::copy_n(pColorAttachmentFormats, colorAttachmentCount, colorAttachmentFormats.data());
+		}
+		else
+		{
+			colorAttachmentFormats.clear();
+		}
+
+		this->depthAttachmentFormat = depthAttachmentFormat;
 	}
 
 	std::vector<const Shader*> GraphicsPipeline::GetPipelineShaders() const
@@ -449,7 +492,10 @@ namespace Niagara
 	{
 		Pipeline::Init(device);
 
-		descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, 0, g_PushDescriptorsSupported);
+		if (!setResources.empty())
+			descriptorUpdateTemplate = CreateDescriptorUpdateTemplate(device, VK_PIPELINE_BIND_POINT_COMPUTE, 0, g_PushDescriptorsSupported);
+		else
+			descriptorUpdateTemplate = VK_NULL_HANDLE;
 		
 		VkComputePipelineCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;

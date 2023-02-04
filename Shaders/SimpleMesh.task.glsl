@@ -160,7 +160,7 @@ void main()
 	 */
 	barrier(); // memoryBarrierShared();
 
-	bool accept = false;
+	bool accept = true;
 
 	if (meshletIndex < meshletMaxIndex)
 	{
@@ -171,13 +171,20 @@ void main()
 
 		vec4 boundingSphere = meshlets[meshletIndex].boundingSphere;
 		boundingSphere.xyz = (worldMatrix * vec4(boundingSphere.xyz, 1.0)).xyz;
-		accept = !ConeCull_BoundingSphere(cone, boundingSphere, _View.camPos);
-
-		// View space frustum culling
-		boundingSphere.xyz = (_View.viewMatrix * vec4(boundingSphere.xyz, 1.0f)).xyz;
 		vec3 scale = GetScaleFromWorldMatrix(worldMatrix);
 		boundingSphere.w *= scale.x; // just uniform scale
-		accept = accept && !FrustumCull(boundingSphere);
+
+		if (_DebugParams.meshletConeCulling > 0)
+		{
+			accept = accept && !ConeCull_BoundingSphere(cone, boundingSphere, _View.camPos);
+		}
+
+		// View space frustum culling
+		if (_DebugParams.meshletFrustumCulling > 0)
+		{
+			boundingSphere.xyz = (_View.viewMatrix * vec4(boundingSphere.xyz, 1.0f)).xyz;
+			accept = accept && !FrustumCull(boundingSphere);
+		}
 	}
 
 	if (accept)

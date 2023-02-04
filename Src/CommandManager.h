@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pch.h"
+#include "VkCommon.h"
 #include "Shaders.h"
 #include "Pipeline.h"
 #include <queue>
@@ -10,6 +11,7 @@ namespace Niagara
 {
 	class Device;
 	class Image;
+	class ImageView;
 
 	VkCommandBuffer BeginSingleTimeCommands();
 	void EndSingleTimeCommands(VkCommandBuffer cmd);
@@ -44,6 +46,19 @@ namespace Niagara
 	{
 	public:
 		static constexpr uint32_t s_MaxBarrierNum = 16;
+		static constexpr uint32_t s_MaxAttachments = 8;
+
+		struct Attachment
+		{
+			const ImageView* view{ nullptr };
+			VkImageLayout layout{ VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL };
+
+			Attachment() = default;
+
+			Attachment(const ImageView *inView, VkImageLayout inLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL) 
+				: view{inView}, layout {inLayout}
+			{  }
+		};
 
 	private:
 		VkCommandBuffer cachedCommandBuffer = VK_NULL_HANDLE;
@@ -53,9 +68,24 @@ namespace Niagara
 
 		VkPipelineBindPoint pipelineBindPoint = (VkPipelineBindPoint)0;
 		
+		// Descriptors
 		DescriptorSetInfo descriptorSetInfos[Pipeline::s_MaxDescrptorSetNum] = {};
 		DescriptorInfo cachedDescriptorInfos[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
 		VkWriteDescriptorSet cachedWriteDescriptorSets[Pipeline::s_MaxDescrptorSetNum][Pipeline::s_MaxDescriptorNum] = {};
+
+		// Dynamic rendering
+		// Attachments
+		Attachment cachedColorAttachments[s_MaxAttachments];
+		LoadStoreInfo cachedColorLoadStoreInfos[s_MaxAttachments];
+		VkClearValue cachedColorClearValues[s_MaxAttachments] = {};
+		uint32_t activeColorAttachmentCount{ 0 };
+		Attachment cachedColorResolves[s_MaxAttachments];
+		uint32_t activeColorResolveCount{ 0 };
+
+		Attachment cachedDepthAttachment;
+		LoadStoreInfo cachedDepthLoadStoreInfo;
+		VkClearValue cachedDepthClearValue{};
+		Attachment cachedDepthResolve;
 
 		// Barriers
 		VkImageMemoryBarrier cachedImageMemoryBarriers[s_MaxBarrierNum] = {};
@@ -81,6 +111,15 @@ namespace Niagara
 			cachedCommandBuffer = VK_NULL_HANDLE;
 		}
 
+		// Dynamic rendering
+		void SetAttachments(Attachment* pColorAttachments, uint32_t colorAttachmentCount, LoadStoreInfo* pColorLoadStoreInfos, VkClearColorValue *pClearColorValues = nullptr,
+			Attachment* pDepthAttachment = nullptr, LoadStoreInfo* pDepthLoadStoreInfo = nullptr, VkClearDepthStencilValue *pClearDepthValue = nullptr);
+
+		void BeginRendering(VkCommandBuffer cmd, const VkRect2D& renderArea);
+
+		void EndRendering(VkCommandBuffer cmd);
+
+		// Render pass
 		void BeginRenderPass(VkCommandBuffer cmd, VkRenderPass renderPass, VkFramebuffer framebuffer, const VkRect2D& renderArea, const std::vector<VkClearValue>& clearValues);
 
 		void EndRenderPass(VkCommandBuffer cmd)
@@ -149,7 +188,7 @@ namespace Niagara
 
 		void ImageBarrier(VkImage image, const VkImageSubresourceRange& subresourceRange, VkImageLayout oldLayout, VkImageLayout newLayout, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT);
 
-		void BufferBarrier(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset = 0, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT);
+		void BufferBarrier(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE, VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, VkAccessFlags dstAccessMask = VK_ACCESS_MEMORY_READ_BIT);
 
 		void PipelineBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask);
 
@@ -163,11 +202,11 @@ namespace Niagara
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
-		void BufferBarrier2(VkBuffer buffer, VkDeviceSize size, VkDeviceSize offset, 
+		void BufferBarrier2(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
-		void PipelineBarriers2(VkCommandBuffer cmd, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask);
+		void PipelineBarriers2(VkCommandBuffer cmd);
 
 		void Blit(VkCommandBuffer cmd, const Image& srcImage, const Image& dstImage, uint32_t srcMipLevel = 0, uint32_t dstMipLevel = 0);
 

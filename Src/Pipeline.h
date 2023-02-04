@@ -217,6 +217,9 @@ namespace Niagara
 		// States
 		GraphicsPipelineState pipelineState;
 
+		std::vector<VkFormat> colorAttachmentFormats;
+		VkFormat depthAttachmentFormat{ VK_FORMAT_UNDEFINED };
+
 		virtual void Init(VkDevice device) override;
 		virtual void Destroy(VkDevice device) override;
 
@@ -227,6 +230,8 @@ namespace Niagara
 			return (fragShader != nullptr && fragShader->IsValid()) && 
 				(vertShader != nullptr && vertShader->IsValid()|| meshShader != nullptr && meshShader->IsValid());
 		}
+
+		void SetAttachments(VkFormat* pColorAttachmentFormats, uint32_t colorAttachmentCount, VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED);
 	};
 
 	class ComputePipeline : public Pipeline

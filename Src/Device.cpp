@@ -222,9 +222,7 @@ namespace Niagara
 		}
 
 		if (physicalDevice)
-		{
-			std::cout << "Used GPU: " << props.deviceName << " .\n ";
-		}
+			printf("Select GPU: %s.\n", props.deviceName);
 
 		return physicalDevice;
 	}

@@ -65,22 +65,24 @@ namespace Niagara
 		void Init(const Device& device);
 		void Destroy(const Device& device);
 
+		operator VkRenderPass() const { return renderPass; }
+
 		void SetAttachments(Attachment* pColorAttachments, uint32_t colorAttachmentCount, LoadStoreInfo* pColorLoadStoreInfos, Attachment* pDepthAttachment = nullptr, LoadStoreInfo* pDepthLoadStoreInfo = nullptr)
 		{
 			activeColorAttachmentCount = colorAttachmentCount;
 
 			if (pColorAttachments != nullptr)
 			{
-				if (colorAttachments.size() < activeColorAttachmentCount)
+				if (colorAttachments.size() < colorAttachmentCount)
 				{
-					colorAttachments.resize(activeColorAttachmentCount);
-					colorLoadStoreInfos.resize(activeColorAttachmentCount);
+					colorAttachments.resize(colorAttachmentCount);
+					colorLoadStoreInfos.resize(colorAttachmentCount);
 				}
 
 				std::copy_n(pColorAttachments, colorAttachmentCount, colorAttachments.begin());
 
 				if (pColorLoadStoreInfos != nullptr)
-					std::copy_n(pColorLoadStoreInfos, activeColorAttachmentCount, colorLoadStoreInfos.begin());
+					std::copy_n(pColorLoadStoreInfos, colorAttachmentCount, colorLoadStoreInfos.begin());
 			}
 
 			if (pDepthAttachment != nullptr)
@@ -94,7 +96,7 @@ namespace Niagara
 			{
 				depthAttachment.format = VK_FORMAT_UNDEFINED;
 			}
-		}		
+		}
 
 		void SetSubpassInfos(const std::vector<SubpassInfo>& subpassInfos)
 		{
