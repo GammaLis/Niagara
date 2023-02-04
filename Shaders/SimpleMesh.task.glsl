@@ -53,45 +53,6 @@ layout (std430, binding = DESC_MESHLET_BUFFER) readonly buffer Meshlets
 
 taskPayloadSharedEXT TaskPayload payload;
 
-/**
- * >> MeshOptimizer
- * For backface culling with orthographic projection, use the following formula to reject backfacing clusters:
- *   dot(view, cone_axis) >= cone_cutoff
- *
- * For perspective projection, you can the formula that needs cone apex in addition to axis & cutoff:
- *   dot(normalize(cone_apex - camera_position), cone_axis) >= cone_cutoff
- *
- * Alternatively, you can use the formula that doesn't need cone apex and uses bounding sphere instead:
- *   dot(normalize(center - camera_position), cone_axis) >= cone_cutoff + radius / length(center - camera_position)
- * or an equivalent formula that doesn't have a singularity at center = camera_position:
- *   dot(center - camera_position, cone_axis) >= cone_cutoff * length(center - camera_position) + radius
- *
- * The formula that uses the apex is slightly more accurate but needs the apex; if you are already using bounding sphere
- * to do frustum/occlusion culling, the formula that doesn't use the apex may be preferable (for derivation see
- * Real-Time Rendering 4th Edition, section 19.3).
- */
-
-bool ConeCull(vec4 cone, vec3 viewDir)
-{
-	float VdotCone = dot(viewDir, cone.xyz);
-	float threshold = sqrt(1.0 - cone.w * cone.w);
-	// FIXME:
-	// return cone.w < 0 ? VdotCone > threshold : VdotCone < -threshold;
-	// return cone.w > 0 && VdotCone < -threshold;
-	return VdotCone >= cone.w;
-}
-
-bool ConeCull_ConeApex(vec4 cone, vec3 coneApex, vec3 camPos)
-{
-	return dot(normalize(coneApex - camPos), cone.xyz) >= cone.w;
-}
-
-bool ConeCull_BoundingSphere(vec4 cone, vec4 boundingSphere, vec3 camPos)
-{
-	vec3 sphereToCamVec = boundingSphere.xyz - camPos;
-	return dot(cone.xyz, sphereToCamVec) >= cone.w * length(sphereToCamVec) + boundingSphere.w;
-}
-
 
 #if !USE_SUBGROUP
 shared uint sh_MeshletCount;
@@ -136,7 +97,7 @@ void main()
 	const uint meshletMaxIndex = meshletOffset + meshletCount;
 	const uint meshletIndex = localThreadIdStart + localThreadId + meshletOffset;
 
-	const mat4 worldMat = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
+	const mat4 worldMatrix = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
 	vec3 viewDir = vec3(0, 0, 1);
 
@@ -203,12 +164,20 @@ void main()
 
 	if (meshletIndex < meshletMaxIndex)
 	{
+		// TODO: View space cone culling ?
+		// World space cone culling
 		vec4 cone = meshlets[meshletIndex].cone;
-		cone = vec4(mat3(worldMat) * cone.xyz, cone.w);
+		cone = vec4(mat3(worldMatrix) * cone.xyz, cone.w);
 
 		vec4 boundingSphere = meshlets[meshletIndex].boundingSphere;
-		boundingSphere.xyz = (worldMat * vec4(boundingSphere.xyz, 1.0)).xyz;
+		boundingSphere.xyz = (worldMatrix * vec4(boundingSphere.xyz, 1.0)).xyz;
 		accept = !ConeCull_BoundingSphere(cone, boundingSphere, _View.camPos);
+
+		// View space frustum culling
+		boundingSphere.xyz = (_View.viewMatrix * vec4(boundingSphere.xyz, 1.0f)).xyz;
+		vec3 scale = GetScaleFromWorldMatrix(worldMatrix);
+		boundingSphere.w *= scale.x; // just uniform scale
+		accept = accept && !FrustumCull(boundingSphere);
 	}
 
 	if (accept)

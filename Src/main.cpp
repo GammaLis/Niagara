@@ -12,6 +12,8 @@
 #include "Image.h"
 #include "Camera.h"
 #include "Utilities.h"
+#include "Config.h"
+#include "Geometry.h"
 
 #include <iostream>
 #include <fstream>
@@ -24,51 +26,14 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 
+using namespace Niagara;
 
-/// Mesh
-#include "meshoptimizer.h"
-
-#define FAST_OBJ_IMPLEMENTATION
-#include "fast_obj.h"
-
-
-/// Custom settings
-#define DRAW_SIMPLE_TRIANGLE 0
-#define DRAW_SIMPLE_MESH 1
-
-#define DRAW_MODE DRAW_SIMPLE_MESH
-
-#define VERTEX_INPUT_MODE 1
-#define FLIP_VIEWPORT 1
-#define USE_MESHLETS 1
-#define USE_FRAGMENT_SHADING_RATE 1
-#define USE_MULTI_DRAW_INDIRECT 1
-#define USE_DEVICE_8BIT_16BIT_EXTENSIONS 1
-#define USE_DEVICE_MAINTENANCE4_EXTENSIONS 1
-#define USE_PACKED_PRIMITIVE_INDICES_NV 0
-// Mesh shader needs the 8bit_16bit_extension
-
-
-/// Global variables
-
-constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
-
-constexpr uint32_t MESHLET_MAX_VERTICES = 64;
-constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
-
-constexpr uint32_t MESH_MAX_LODS = 8;
-
-constexpr uint32_t TASK_GROUP_SIZE = 32;
-constexpr uint32_t DRAW_COUNT = 1000;
-constexpr float SCENE_RADIUS = 20.0f;
-constexpr float MAX_DRAW_DISTANCE = 20.0f;
 
 const std::string g_ResourcePath = "../Resources/";
 const std::string g_ShaderPath = "./CompiledShaders/";
-VkExtent2D g_ViewportSize{};
 
 GLFWwindow* g_Window = nullptr;
+VkExtent2D g_ViewportSize{};
 bool g_FramebufferResized = false;
 double g_DeltaTime = 0.0;
 
@@ -281,133 +246,6 @@ enum DescriptorBindings : uint32_t
 
 
 /// Structures
-
-struct Vertex
-{
-	glm::vec3 p;
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
-	// glm::u16vec3 p;
-	glm::u8vec4 n;
-	glm::u16vec2 uv;
-#else
-	glm::vec3 n;
-	glm::vec2 uv;
-#endif
-
-	static VkVertexInputBindingDescription GetBindingDescription()
-	{
-		// A vertex binding describes at which rate to load data from memory throughout the vertices.
-		// It specifies the number of bytes between data entries and whether to move to the next data entry after 
-		// each vertex or after each instance.
-		VkVertexInputBindingDescription desc{};
-		// All of the per-vertex data is packed together in one array, so we're only going to have 1 binding.
-		desc.binding = 0;
-		desc.stride = sizeof(Vertex);
-		desc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-		return desc;
-	}
-
-	static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions()
-	{
-		std::vector<VkVertexInputAttributeDescription> attributeDescs(3);
-
-		// float	VK_FORAMT_R32_SFLOAT
-		// vec2		VK_FORMAT_R32G32_SFLOAT
-		// vec3		VK_FORMAT_R32G32B32_SFLOAT
-		// vec4		VK_FORMAT_R32G32B32A32_SFLOAT
-		// ivec2	VK_FORMAT_R32G32_SINT
-		// uvec4	VK_FORMAT_R32G32B32A32_UINT
-		// double	VK_FORMAT_R64_SFLOAT
-
-		uint32_t vertexAttribOffset = 0;
-
-		attributeDescs[0].binding = 0;
-		attributeDescs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescs[0].location = 0;
-		attributeDescs[0].offset = offsetof(Vertex, p); // vertexAttribOffset 
-		vertexAttribOffset += 3 * 4;
-
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
-		attributeDescs[1].binding = 0;
-		attributeDescs[1].format = VK_FORMAT_R8G8B8A8_UINT;
-		attributeDescs[1].location = 1;
-		attributeDescs[1].offset = offsetof(Vertex, n); // vertexAttribOffset;
-		vertexAttribOffset += 4;
-
-		attributeDescs[2].binding = 0;
-		attributeDescs[2].format = VK_FORMAT_R16G16_SFLOAT;
-		attributeDescs[2].location = 2;
-		attributeDescs[2].offset = offsetof(Vertex, uv); // vertexAttribOffset;
-		vertexAttribOffset += 2 * 2;
-
-#else
-		attributeDescs[1].binding = 0;
-		attributeDescs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescs[1].location = 1;
-		attributeDescs[1].offset = offsetof(Vertex, n); // vertexAttribOffset;
-		vertexAttribOffset += 3 * 4;
-
-		attributeDescs[2].binding = 0;
-		attributeDescs[2].format = VK_FORMAT_R32G32_SFLOAT;
-		attributeDescs[2].location = 2;
-		attributeDescs[2].offset = offsetof(Vertex, uv); // vertexAttribOffset;
-		vertexAttribOffset += 2 * 4;
-#endif
-
-		return attributeDescs;
-	}
-};
-
-/**
-* Meshlets
-* Each meshlet represents a variable number of vertices and primitives. There are no restrictions regarding the connectivity of
-* these primitives. However, they must stay below a maximum amount, specified within the shader code.
-* We recommend using up to 64 vertices and 126 primitives. The `6` in 126 is not a typo. The first generation hardware allocates
-* primitive indices in 128 byte granularity and needs to reserve 4 bytes for the primitive count. Therefore 3 * 126 + 4 maximizes
-* the fit into a 3 * 128 = 384 bytes block. Going beyond 126 triangles would allocate the next 128 bytes. 84 and 40 are other 
-* maxima that work well for triangles.
-*/
-struct alignas(16) Meshlet
-{
-	glm::vec4 boundingSphere; // xyz - center, w - radius
-	glm::vec4 coneApex; // w - unused
-	glm::vec4 cone; // xyz - cone direction, w - cosAngle
-	// uint32_t vertices[MESHLET_MAX_VERTICES];
-	// uint8_t indices[MESHLET_MAX_PRIMITIVES*3]; // up to MESHLET_MAX_PRIMITIVES triangles
-	uint32_t vertexOffset;
-	uint8_t vertexCount = 0;
-	uint8_t triangleCount = 0;
-};
-
-struct MeshLod
-{
-	uint32_t indexOffset;
-	uint32_t indexCount;
-	uint32_t meshletOffset;
-	uint32_t meshletCount;
-};
-
-struct alignas(16) Mesh
-{
-	glm::vec4 boundingSphere;
-
-	uint32_t vertexOffset;
-	uint32_t vertexCount;
-	
-	uint32_t lodCount;
-	MeshLod lods[MESH_MAX_LODS];
-};
-
-struct Geometry
-{
-	std::vector<Vertex> vertices;
-	std::vector<uint32_t> indices;
-	std::vector<uint32_t> meshletData;
-	std::vector<Meshlet> meshlets;
-
-	std::vector<Mesh> meshes;
-};
 
 struct alignas(16) MeshDraw
 {
@@ -708,62 +546,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
 	return VK_FALSE;
 }
 
-bool CheckValidationLayerSupport(const std::vector<const char*> &validationLayers) 
-{
-	uint32_t layerCount = 0;
-	vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-
-	std::vector<VkLayerProperties> availableLayers(layerCount);
-	vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
-	for (const char* layerName : validationLayers)
-	{
-		bool layerFound = false;
-
-		for (const auto& layerProperties : availableLayers)
-		{
-			if (strcmp(layerName, layerProperties.layerName) == 0)
-			{
-				layerFound = true;
-				break;
-			}
-		}
-
-		if (!layerFound)
-			return false;
-	}
-
-	return true;
-}
-
-std::vector<const char*> GetInstanceExtensions()
-{
-#if 0
-	uint32_t glfwExtensionCount = 0;
-	const char** glfwExtensions;
-	glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-
-#else
-	std::vector<const char*> extensions = { VK_KHR_SURFACE_EXTENSION_NAME };
-
-	// Now it's only win32
-#if defined(_WIN32)
-	extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-#endif
-
-#endif
-
-	if (g_bEnableValidationLayers)
-	{
-		extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);	// SRS - Dependency when VK_EXT_DEBUG_MARKER is enabled
-		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-	}
-
-	return extensions;
-}
-
 void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
 {
 	createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -784,163 +566,8 @@ VkDebugUtilsMessengerEXT SetupDebugMessenger(VkInstance instance)
 	return debugMessenger;
 }
 
-// The very first thing you need to do is initialize the Vulkan library by creating an instance. 
-// The instance is the connection between your application and the Vulkan library and creating it 
-// involves specifying some details about your application to the driver.
-VkInstance GetVulkanInstance()
-{
-	// In real Vulkan applications you should probably check if 1.3 is available via
-	// vkEnumerateInstanceVersion(...)
-	VkApplicationInfo appInfo{};
-	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-	// Using value initialization to leave it as `nullptr`
-	// appInfo.pNext = nullptr;
-	appInfo.pApplicationName = "Hello Vulkan";
-	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-	appInfo.pEngineName = "No Engine";
-	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-	appInfo.apiVersion = VK_API_VERSION_1_3;
-
-	const std::vector<const char*> validationLayers =
-	{
-		"VK_LAYER_KHRONOS_validation"
-	};
-
-	assert(!g_bEnableValidationLayers || CheckValidationLayerSupport(validationLayers));
-
-	// Get extensions supported by the instance
-	std::vector<std::string> supportedExtensions;
-
-	uint32_t extensionCount = 0;
-	vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
-	if (extensionCount > 0)
-	{
-		std::vector<VkExtensionProperties> extensions(extensionCount);
-		if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) == VK_SUCCESS)
-		{
-			for (const auto &ext : extensions)
-				supportedExtensions.push_back(ext.extensionName);
-		}
-	}
-
-	std::vector<const char*> extensions = GetInstanceExtensions();
-
-	if (!g_InstanceExtensions.empty())
-	{
-		for (const char *enabledExt : g_InstanceExtensions)
-		{
-			// Output message if requested extension is not available
-			if (std::find(supportedExtensions.begin(), supportedExtensions.end(), enabledExt) == supportedExtensions.end())
-			{
-				std::cerr << "Enabled instance extension: " << enabledExt << " is not present at instance level.\n";
-				continue;
-			}
-			extensions.push_back(enabledExt);
-		}
-	}
-
-	VkInstance instance = VK_NULL_HANDLE;
-	{
-		VkInstanceCreateInfo createInfo{};
-		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-		createInfo.pApplicationInfo = &appInfo;
-		createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-		createInfo.ppEnabledExtensionNames = extensions.data();
-
-		VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-		if (g_bEnableValidationLayers)
-		{
-			createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-			createInfo.ppEnabledLayerNames = validationLayers.data();
-
-			PopulateDebugMessengerCreateInfo(debugCreateInfo);
-			createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
-		}
-		else 
-		{
-			createInfo.enabledLayerCount = 0;
-			createInfo.pNext = nullptr;
-		}
-
-		VK_CHECK(vkCreateInstance(&createInfo, nullptr, &instance));
-	}
-
-	return instance;
-}
-
-
-void GetImageViews(VkDevice device, std::vector<VkImageView> &imageViews, const std::vector<VkImage> &images, VkFormat imageFormat)
-{
-	imageViews.resize(images.size());
-
-	VkImageViewCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-	createInfo.format = imageFormat;
-	createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-	createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-	createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-	createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-	// The `subresourceRange` field describes what the image's purpose is and which part of the image should be accessed.
-	createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	createInfo.subresourceRange.baseMipLevel = 0;
-	createInfo.subresourceRange.levelCount = 1;
-	createInfo.subresourceRange.baseArrayLayer = 0;
-	createInfo.subresourceRange.layerCount = 1;
-	for (size_t i = 0; i < images.size(); ++i)
-	{
-		createInfo.image = images[i];
-		
-		VK_CHECK(vkCreateImageView(device, &createInfo, nullptr, &imageViews[i]));
-	}
-}
 
 #pragma region Pipeline
-
-VkRenderPass GetRenderPass(VkDevice device, VkFormat format)
-{
-	// Attachment description
-	VkAttachmentDescription colorAttachment{};
-	colorAttachment.format = format;
-	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-	// The `loadOp` and `storeOp` determine what to do with the data in the attachment before rendering and after rendering.
-	// * LOAD: Preserve the existing contents of the attachments
-	// * CLEAR: Clear the values to a constant at the start
-	// * DONT_CARE: Existing contents are undefined; we don't care about them
-	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-
-	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-	// Subpasses and attachment references
-	// A single render pass can consist of multiple subpasses. Subpasses are subsequent rendering operations that depend on
-	// the contents of framebuffers in previous passes, for example a sequence of post-processing effects that are applied one after another.
-	// If you group these rendering operations into one render pass, then Vulkan is able to reorder the operations and conserve memory bandwidth
-	// for possibly better performance.
-	VkAttachmentReference colorAttachementRef{};
-	colorAttachementRef.attachment = 0; // attachment index
-	colorAttachementRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments = &colorAttachementRef;
-
-	VkRenderPassCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	createInfo.attachmentCount = 1;
-	createInfo.pAttachments = &colorAttachment;
-	createInfo.subpassCount = 1;
-	createInfo.pSubpasses = &subpass;
-
-	VkRenderPass renderPass = VK_NULL_HANDLE;
-	VK_CHECK(vkCreateRenderPass(device, &createInfo, nullptr, &renderPass));
-
-	return renderPass;
-}
 
 void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, Niagara::RenderPass &renderPass, uint32_t subpass, const VkRect2D& viewportRect)
 {
@@ -1031,7 +658,7 @@ VkFramebuffer GetFramebuffer(VkDevice device, const std::vector<VkImageView> &at
 	return framebuffer;
 }
 
-void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, const Niagara::Swapchain &swapchain, uint32_t imageIndex, const Geometry &geometry)
+void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, const Niagara::Swapchain &swapchain, uint32_t imageIndex, const Niagara::Geometry &geometry)
 {
 	g_CommandContext.BeginCommandBuffer(cmd);
 
@@ -1417,7 +1044,7 @@ VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
 
 /// Main
 
-void Render(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, const Niagara::Swapchain& swapchain, uint32_t imageIndex, const Geometry& geometry, VkQueue graphicsQueue, SyncObjects& syncObjects)
+void Render(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers, const Niagara::Swapchain& swapchain, uint32_t imageIndex, const Niagara::Geometry& geometry, VkQueue graphicsQueue, SyncObjects& syncObjects)
 {
 	vkResetCommandBuffer(cmd, 0);
 
@@ -1443,391 +1070,6 @@ void Render(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &framebuffers,
 
 	VK_CHECK(vkQueueSubmit(graphicsQueue, 1, &submitInfo, syncObjects.inFlightFence));
 }
-
-
-bool LoadObj(std::vector<Vertex> &vertices, const char* path)
-{
-	fastObjMesh* obj = fast_obj_read(path);
-
-	if (obj == nullptr)
-		return false;
-
-	size_t vertexCount = 0, indexCount = 0;
-	for (uint32_t i = 0; i < obj->face_count; ++i)
-	{
-		vertexCount += obj->face_vertices[i];
-		indexCount += (obj->face_vertices[i] - 2) * 3; // 3 -> 3, 4 -> 6
-	}
-
-	// Currently, duplicated vertices, vertexCount == indexCount
-	vertexCount = indexCount;
-
-	vertices.resize(vertexCount);
-
-	size_t vertexOffset = 0, indexOffset = 0;
-	for (uint32_t i = 0; i < obj->face_count; ++i)
-	{
-		for (uint32_t j = 0; j < obj->face_vertices[i]; ++j)
-		{
-			fastObjIndex objIndex = obj->indices[indexOffset + j];
-
-			// Triangulate polygon on the fly; offset - 3 is always the first polygon vertex
-			if (j >= 3)
-			{
-				vertices[vertexOffset + 0] = vertices[vertexOffset - 3];
-				vertices[vertexOffset + 1] = vertices[vertexOffset - 1];
-				vertexOffset += 2;
-			}
-
-			Vertex& v = vertices[vertexOffset++];
-
-			// P
-			v.p.x = obj->positions[objIndex.p * 3 + 0];
-			v.p.y = obj->positions[objIndex.p * 3 + 1];
-			v.p.z = obj->positions[objIndex.p * 3 + 2];
-			
-#if USE_DEVICE_8BIT_16BIT_EXTENSIONS
-			// P
-			// v.p.x = meshopt_quantizeHalf(obj->positions[objIndex.p * 3 + 0]);
-			// v.p.y = meshopt_quantizeHalf(obj->positions[objIndex.p * 3 + 1]);
-			// v.p.z = meshopt_quantizeHalf(obj->positions[objIndex.p * 3 + 2]);
-			// N
-			v.n.x = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 0] * 127.f + 127.5f);
-			v.n.y = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 1] * 127.f + 127.5f);
-			v.n.z = static_cast<uint8_t>(obj->normals[objIndex.n * 3 + 2] * 127.f + 127.5f);
-			// UV
-			v.uv.x = meshopt_quantizeHalf(obj->texcoords[objIndex.t * 2 + 0]);
-			v.uv.y = meshopt_quantizeHalf(obj->texcoords[objIndex.t * 2 + 1]);
-#else
-			// N
-			v.n.x = obj->normals[objIndex.n * 3 + 0];
-			v.n.y = obj->normals[objIndex.n * 3 + 1];
-			v.n.z = obj->normals[objIndex.n * 3 + 2];
-			// UV
-			v.uv.x = obj->texcoords[objIndex.t * 2 + 0];
-			v.uv.y = obj->texcoords[objIndex.t * 2 + 1];
-#endif
-		}
-
-		indexOffset += obj->face_vertices[i];
-	}
-
-	assert(vertexOffset == indexCount);
-
-	fast_obj_destroy(obj);
-	
-	return true;
-}
-
-size_t BuildOptMeshlets(Geometry& result, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
-{
-	static const float ConeWeight = 0.25f;
-	auto meshletCount = meshopt_buildMeshletsBound(indices.size(), MESHLET_MAX_VERTICES, MESHLET_MAX_PRIMITIVES);
-	std::vector<meshopt_Meshlet> optMeshlets(meshletCount);
-	std::vector<uint32_t> meshlet_vertices(meshletCount * MESHLET_MAX_VERTICES);
-	std::vector<uint8_t> meshlet_triangles(meshletCount * MESHLET_MAX_PRIMITIVES * 3);
-	meshletCount = meshopt_buildMeshlets(
-		optMeshlets.data(),
-		meshlet_vertices.data(),
-		meshlet_triangles.data(),
-		indices.data(),
-		indices.size(),
-		&vertices[0].p.x,
-		vertices.size(),
-		sizeof(Vertex),
-		MESHLET_MAX_VERTICES,
-		MESHLET_MAX_PRIMITIVES,
-		ConeWeight);
-	optMeshlets.resize(meshletCount);
-
-	// Append meshlet data
-	uint32_t vertexCount = 0, triangleCount = 0, indexGroupCount = 0;
-	for (const auto& optMeshlet : optMeshlets)
-	{
-		vertexCount += optMeshlet.vertex_count;
-		triangleCount += optMeshlet.triangle_count;
-		indexGroupCount += Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
-	}
-	uint32_t meshletDataOffset = static_cast<uint32_t>(result.meshletData.size());
-#if USE_PACKED_PRIMITIVE_INDICES_NV
-	result.meshletData.insert(result.meshletData.end(), vertexCount + indexGroupCount, 0);
-#else
-	result.meshletData.insert(result.meshletData.end(), vertexCount + triangleCount, 0);
-#endif
-
-	uint32_t meshletOffset = static_cast<uint32_t>(result.meshlets.size());
-	result.meshlets.insert(result.meshlets.end(), meshletCount, {});
-
-	for (uint32_t i = 0; i < meshletCount; ++i)
-	{
-		const auto& optMeshlet = optMeshlets[i];
-		auto& meshlet = result.meshlets[meshletOffset + i];
-
-		// Meshlet
-		meshopt_Bounds bounds = meshopt_computeMeshletBounds(
-			&meshlet_vertices[optMeshlet.vertex_offset],
-			&meshlet_triangles[optMeshlet.triangle_offset],
-			optMeshlet.triangle_count,
-			&vertices[0].p.x,
-			vertices.size(),
-			sizeof(Vertex));
-		meshlet.vertexCount = static_cast<uint8_t>(optMeshlets[i].vertex_count);
-		meshlet.triangleCount = static_cast<uint8_t>(optMeshlets[i].triangle_count);
-		meshlet.vertexOffset = meshletDataOffset;
-		meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
-		meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[0], 0);
-		meshlet.cone = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
-
-		// Vertex indices
-		for (uint32_t j = 0; j < optMeshlet.vertex_count; ++j)
-			result.meshletData[meshletDataOffset + j] = meshlet_vertices[optMeshlet.vertex_offset + j];
-
-		meshletDataOffset += optMeshlet.vertex_count;
-
-#if USE_PACKED_PRIMITIVE_INDICES_NV
-		// Triangle indices (packed in 4 bytes)
-		const uint32_t* indexGroups = reinterpret_cast<uint32_t*>(&meshlet_triangles[optMeshlet.triangle_offset]);
-		uint32_t indexGroupCount = Niagara::DivideAndRoundUp(optMeshlet.triangle_count * 3, 4);
-		for (uint32_t j = 0; j < indexGroupCount; ++j)
-			result.meshletData[meshletDataOffset + j] = indexGroups[j];
-
-		meshletDataOffset += indexGroupCount;
-
-#else
-		const uint8_t *indices = &meshlet_triangles[optMeshlet.triangle_offset];
-		uint32_t triangleCount = optMeshlet.triangle_count;
-		for (uint32_t j = 0; j < triangleCount; j++)
-			result.meshletData[meshletDataOffset + j] = indices[j*3+0] | (indices[j*3+1] << 8) | (indices[j*3+2] << 16);
-
-		meshletDataOffset += triangleCount;
-
-#endif
-	}
-
-	// Padding
-#if 0
-	if (meshletCount % TASK_GROUP_SIZE != 0)
-	{
-		size_t paddingCount = TASK_GROUP_SIZE - meshletCount % TASK_GROUP_SIZE;
-		result.meshlets.insert(result.meshlets.end(), paddingCount, {});
-		meshletCount += paddingCount;
-	}
-#endif
-
-	return meshletCount;
-}
-
-bool LoadMesh(Geometry &result, const char* path, bool bBuildMeshlets = true, bool bIndexless = false)
-{
-	std::vector<Vertex> triVertices;
-	if (!LoadObj(triVertices, path))
-		return false;
-
-	size_t indexCount = triVertices.size();
-
-	// FIXME: not used now
-	if (bIndexless)
-	{
-		Mesh mesh{};
-		mesh.vertexOffset = static_cast<uint32_t>(result.vertices.size());
-		mesh.vertexCount = static_cast<uint32_t>(triVertices.size());
-
-		result.vertices.insert(result.vertices.end(), triVertices.begin(), triVertices.end());
-#if 0
-		mesh.indices.resize(indexCount);
-		for (size_t i = 0; i < indexCount; ++i)
-			mesh.indices[i] = i;
-#endif
-	}
-	else
-	{	
-		std::vector<uint32_t> remap(indexCount);
-		size_t vertexCount = meshopt_generateVertexRemap(remap.data(), nullptr, indexCount, triVertices.data(), indexCount, sizeof(Vertex));
-
-		std::vector<Vertex> vertices(vertexCount);
-		std::vector<uint32_t> indices(indexCount);
-
-		meshopt_remapVertexBuffer(vertices.data(), triVertices.data(), indexCount, sizeof(Vertex), remap.data());
-		meshopt_remapIndexBuffer(indices.data(), nullptr, indexCount, remap.data());
-
-		meshopt_optimizeVertexCache(indices.data(), indices.data(), indexCount, vertexCount);
-		meshopt_optimizeVertexFetch(vertices.data(), indices.data(), indexCount, vertices.data(), vertexCount, sizeof(Vertex));
-
-		// Mesh
-		result.meshes.push_back({});
-		auto& mesh = result.meshes.back();
-		{
-			// Vertices
-			mesh.vertexOffset = static_cast<uint32_t>(result.vertices.size());
-			mesh.vertexCount = static_cast<uint32_t>(vertexCount);
-			result.vertices.insert(result.vertices.end(), vertices.begin(), vertices.end());
-
-			// Bounding sphere
-			glm::vec3 center{ 0.0f };
-			for (const auto& vert : vertices)
-				center += vert.p;
-			center /= vertexCount;
-
-			float radius = 0.0f;
-			glm::vec3 tempVec{};
-			for (const auto& vert : vertices)
-			{
-				tempVec = vert.p - center;
-				radius = std::max(radius, glm::dot(tempVec, tempVec));
-			}
-			radius = sqrtf(radius);
-
-			mesh.boundingSphere = glm::vec4(center, radius);
-			
-			// Lods
-			size_t lodIndexCount = indexCount;
-			std::vector<uint32_t> lodIndices = indices;
-			while (mesh.lodCount < MESH_MAX_LODS)
-			{
-				auto& meshLod = mesh.lods[mesh.lodCount++];
-
-				// Indices
-				meshLod.indexOffset = static_cast<uint32_t>(result.indices.size());
-				meshLod.indexCount = static_cast<uint32_t>(lodIndexCount);
-
-				result.indices.insert(result.indices.end(), lodIndices.begin(), lodIndices.end());
-
-				// Meshlets
-				meshLod.meshletOffset = static_cast<uint32_t>(result.meshlets.size());
-				meshLod.meshletCount = bBuildMeshlets ? static_cast<uint32_t>(BuildOptMeshlets(result, vertices, lodIndices)) : 0;
-
-				// Simplify
-				size_t nextTargetIndexCount = size_t(double(lodIndexCount * 0.5f)); // 0.75, 0.5
-				size_t nextIndexCount = meshopt_simplify(lodIndices.data(), lodIndices.data(), lodIndexCount, &vertices[0].p.x, vertexCount, sizeof(Vertex), nextTargetIndexCount, 1e-2f);
-				assert(nextIndexCount <= lodIndexCount);
-
-				// We've reched the error bound
-				if (nextIndexCount == lodIndexCount)
-					break;
-
-				lodIndexCount = nextIndexCount;
-				lodIndices.resize(lodIndexCount);
-				meshopt_optimizeVertexCache(lodIndices.data(), lodIndices.data(), lodIndexCount, vertexCount);
-			}
-		}
-	}
-
-	// Pad meshlets to TASK_GROUP_SIZE to allow shaders to over-read when running task shaders
-#if 1
-	size_t meshletCount = result.meshlets.size();
-	if (meshletCount % TASK_GROUP_SIZE != 0)
-	{
-		size_t paddingCount = TASK_GROUP_SIZE - meshletCount % TASK_GROUP_SIZE;
-		result.meshlets.insert(result.meshlets.end(), paddingCount, {});
-		meshletCount += paddingCount;
-	}
-#endif
-
-	// TODO: optimize the mesh for more efficient GPU rendering
-	return true;
-}
-
-#if 0
-
-void BuildMeshlets(Mesh& mesh)
-{
-	std::vector<Meshlet> meshlets;
-	Meshlet meshlet{};
-	std::vector<uint8_t> meshletVertices(mesh.vertices.size(), 0xFF);
-	uint8_t indexOffset = 0, vertexOffset = 0;
-	for (size_t i = 0; i < mesh.indices.size(); i += 3)
-	{
-		uint32_t i0 = mesh.indices[i];
-		uint32_t i1 = mesh.indices[i+1];
-		uint32_t i2 = mesh.indices[i+2];
-
-		uint8_t &v0 = meshletVertices[i0];
-		uint8_t &v1 = meshletVertices[i1];
-		uint8_t &v2 = meshletVertices[i2];
-
-		if (meshlet.vertexCount + (v0 == 0xFF) + (v1 == 0xFF) + (v2 == 0xFF) > MESHLET_MAX_VERTICES ||
-			meshlet.triangleCount >= MESHLET_MAX_PRIMITIVES)
-		{
-			mesh.meshlets.push_back(meshlet);
-			for (uint8_t mv = 0; mv < meshlet.vertexCount; ++mv)
-				meshletVertices[meshlet.vertices[mv]] = 0xFF;
-			meshlet = {};
-		}
-
-		if (v0 == 0xFF)
-		{
-			v0 = meshlet.vertexCount;
-			meshlet.vertices[meshlet.vertexCount++] = i0;
-		}
-		if (v1 == 0xFF)
-		{
-			v1 = meshlet.vertexCount;
-			meshlet.vertices[meshlet.vertexCount++] = i1;
-		}
-		if (v2 == 0xFF)
-		{
-			v2 = meshlet.vertexCount;
-			meshlet.vertices[meshlet.vertexCount++] = i2;
-		}
-
-		meshlet.indices[meshlet.triangleCount * 3 + 0] = v0;
-		meshlet.indices[meshlet.triangleCount * 3 + 1] = v1;
-		meshlet.indices[meshlet.triangleCount * 3 + 2] = v2;
-		meshlet.triangleCount++;
-	}
-
-	if (meshlet.triangleCount > 0)
-		mesh.meshlets.push_back(meshlet);
-}
-
-void BuildMeshletCones(Mesh &mesh)
-{
-	for (auto &meshlet : mesh.meshlets)
-	{
-		glm::vec3 normals[MESHLET_MAX_PRIMITIVES];
-		for (uint32_t i = 0; i < meshlet.triangleCount; ++i)
-		{
-			uint32_t i0 = meshlet.indices[3 * i + 0];
-			uint32_t i1 = meshlet.indices[3 * i + 1];
-			uint32_t i2 = meshlet.indices[3 * i + 2];
-
-			const Vertex &v0 = mesh.vertices[meshlet.vertices[i0]];
-			const Vertex &v1 = mesh.vertices[meshlet.vertices[i1]];
-			const Vertex &v2 = mesh.vertices[meshlet.vertices[i2]];
-#if 0
-			glm::vec3 p0{ Niagara::ToFloat(v0.p.x),  Niagara::ToFloat(v0.p.y) , Niagara::ToFloat(v0.p.z) };
-			glm::vec3 p1{ Niagara::ToFloat(v1.p.x),  Niagara::ToFloat(v1.p.y) , Niagara::ToFloat(v1.p.z) };
-			glm::vec3 p2{ Niagara::ToFloat(v2.p.x),  Niagara::ToFloat(v2.p.y) , Niagara::ToFloat(v2.p.z) };
-#else
-			glm::vec3 p0 = v0.p, p1 = v1.p, p2 = v2.p;
-#endif
-			glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
-
-			normals[i] = Niagara::SafeNormalize(n);
-		}
-
-		glm::vec3 avgNormal{};
-		for (uint32_t i = 0; i < meshlet.triangleCount; ++i)
-			avgNormal += normals[i];
-		float n = sqrtf(avgNormal.x * avgNormal.x + avgNormal.y * avgNormal.y + avgNormal.z * avgNormal.z);
-		if (n < Niagara::EPS)
-			avgNormal = glm::vec3(1.0f, 0.0f, 0.0f);
-		else
-			avgNormal = avgNormal / (n);
-
-		float minDot = 1.0f;
-		for (uint32_t i = 0; i < meshlet.triangleCount; ++i)
-		{
-			float dot = normals[i].x * avgNormal.x + normals[i].y * avgNormal.y + normals[i].z * avgNormal.z;
-			if (dot < minDot)
-				minDot = dot;
-		}
-
-		meshlet.cone = glm::vec4(avgNormal, minDot);
-	}
-}
-
-#endif
 
 
 int main()
@@ -1859,7 +1101,7 @@ int main()
 	// Vulkan
 	VK_CHECK(volkInitialize());
 
-	VkInstance instance = GetVulkanInstance();
+	VkInstance instance = GetVulkanInstance(g_InstanceExtensions, true);
 	assert(instance);
 
 	volkLoadInstance(instance);
@@ -2045,7 +1287,7 @@ int main()
 	// Geometry
 	Geometry geometry{};
 	
-	const std::vector<std::string> objFileNames{ "kitten.obj", "bunny.obj"}; // kitten bunny
+	const std::vector<std::string> objFileNames{ "kitten.obj", /*"bunny.obj"*/ }; // kitten bunny
 	for (const auto& fileName : objFileNames)
 	{
 		bool bLoaded = LoadMesh(geometry, std::string(g_ResourcePath + fileName).data(), USE_MESHLETS);

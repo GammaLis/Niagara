@@ -117,49 +117,4 @@ struct TaskPayload
 	uint meshletIndices[TASK_GROUP_SIZE];
 };
 
-
-/// Functions
-
-mat4 BuildWorldMatrix(vec4 row0, vec4 row1, vec4 row2)
-{
-	return mat4(
-		vec4(row0.x, row1.x, row2.x, 0.0f),
-        vec4(row0.y, row1.y, row2.y, 0.0f), 
-        vec4(row0.z, row1.z, row2.z, 0.0f),
-        vec4(row0.w, row1.w, row2.w, 1.0f));
-}
-
-vec3 GetScaleFromWorldMatrix(mat4 worldMatrix)
-{
-	float sx = sqrt(dot(worldMatrix[0], worldMatrix[0]));
-	float sy = sqrt(dot(worldMatrix[1], worldMatrix[1]));
-	float sz = sqrt(dot(worldMatrix[2], worldMatrix[2]));
-	return vec3(sx, sy, sz);
-}
-
-// Ref: UE - RayTracingDebug.usf
-uint MurmurMix(uint Hash)
-{
-	Hash ^= Hash >> 16;
-	Hash *= 0x85ebca6b;
-	Hash ^= Hash >> 13;
-	Hash *= 0xc2b2ae35;
-	Hash ^= Hash >> 16;
-	return Hash;
-}
-
-vec3 IntToColor(uint Index)
-{
-	uint Hash  = MurmurMix(Index); 
-
-	vec3 Color = vec3
-	(
-		(Hash >>  0) & 255,
-		(Hash >>  8) & 255,
-		(Hash >> 16) & 255
-	);
-
-	return Color * (1.0f / 255.0f);
-}
-
 #endif // MESH_COMMON_INCLUDED

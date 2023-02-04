@@ -191,6 +191,7 @@
     <ClCompile Include="Camera.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="Device.cpp" />
+    <ClCompile Include="Geometry.cpp" />
     <ClCompile Include="Image.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Pipeline.cpp" />
@@ -224,7 +225,9 @@
     <None Include="..\Shaders\MeshCommon.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="CommandManager.h" />
+    <ClInclude Include="Config.h" />
     <ClInclude Include="Device.h" />
+    <ClInclude Include="Geometry.h" />
     <ClInclude Include="Image.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Pipeline.h" />

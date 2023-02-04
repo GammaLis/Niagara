@@ -4,6 +4,52 @@
 
 namespace Niagara
 {
+	VkRenderPass GetRenderPass(VkDevice device, VkFormat format)
+	{
+		// Attachment description
+		VkAttachmentDescription colorAttachment{};
+		colorAttachment.format = format;
+		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		// The `loadOp` and `storeOp` determine what to do with the data in the attachment before rendering and after rendering.
+		// * LOAD: Preserve the existing contents of the attachments
+		// * CLEAR: Clear the values to a constant at the start
+		// * DONT_CARE: Existing contents are undefined; we don't care about them
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+		// Subpasses and attachment references
+		// A single render pass can consist of multiple subpasses. Subpasses are subsequent rendering operations that depend on
+		// the contents of framebuffers in previous passes, for example a sequence of post-processing effects that are applied one after another.
+		// If you group these rendering operations into one render pass, then Vulkan is able to reorder the operations and conserve memory bandwidth
+		// for possibly better performance.
+		VkAttachmentReference colorAttachementRef{};
+		colorAttachementRef.attachment = 0; // attachment index
+		colorAttachementRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkSubpassDescription subpass{};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorAttachementRef;
+
+		VkRenderPassCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		createInfo.attachmentCount = 1;
+		createInfo.pAttachments = &colorAttachment;
+		createInfo.subpassCount = 1;
+		createInfo.pSubpasses = &subpass;
+
+		VkRenderPass renderPass = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateRenderPass(device, &createInfo, nullptr, &renderPass));
+
+		return renderPass;
+	}
+
+
 	std::vector<VkAttachmentDescription> GetAttachmentDescriptions(const std::vector<Attachment>& attachments, const std::vector<LoadStoreInfo>& loadStoreInfos)
 	{
 		assert(attachments.size() == loadStoreInfos.size());

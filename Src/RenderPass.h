@@ -34,6 +34,8 @@ namespace Niagara
 
 	/// Render pass
 
+	VkRenderPass GetRenderPass(VkDevice device, VkFormat format);
+
 	std::vector<VkAttachmentDescription> GetAttachmentDescriptions(const std::vector<Attachment>& attachments, const std::vector<LoadStoreInfo>& loadStoreInfos);
 	void SetAttachmentLayouts(std::vector<VkSubpassDescription>& subpassDescriptions, std::vector<VkAttachmentDescription>& attachmentDescriptions);
 
