@@ -17,7 +17,6 @@
 #define USE_EXT_MESH_SHADER 1
 #endif
 
-
 #define MAX_VERTICES 64
 #define MAX_PRIMITIVES 84
 #define MAX_LODS 8
@@ -134,7 +133,10 @@ struct DebugParams
 };
 
 #else
-layout (push_constant) uniform DebugParams
+
+#define DESC_DEBUG_UNIFORMS (DESC_VIEW_UNIFORMS+1)
+
+layout (binding = DESC_DEBUG_UNIFORMS) uniform DebugParams
 {
 	// Draw culls
 	uint drawFrustumCulling;
@@ -146,6 +148,8 @@ layout (push_constant) uniform DebugParams
 	// Triangel culls
 	uint triBackfaceCulling;
 	uint triSmallCulling;
+
+	uint toyDraw;
 } _DebugParams;
 #endif
 

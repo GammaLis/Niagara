@@ -313,6 +313,12 @@
     <CustomBuild Include="..\Shaders\SimpleMesh.mesh.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="..\Shaders\ToyMesh.mesh.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\ToyFullScreen.frag.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Shaders\MeshCommon.h">

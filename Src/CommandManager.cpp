@@ -317,10 +317,11 @@ namespace Niagara
 			return descriptorInfos;
 
 		descriptorInfos.resize(descriptorSetInfo.count);
-		for (uint32_t i = descriptorSetInfo.start, imax = descriptorSetInfo.start + descriptorSetInfo.count; i < imax; ++i)
+		for (uint32_t i = 0; i < descriptorSetInfo.count; ++i)
 		{
-			if (descriptorSetInfo.mask & (1 << i))
-				descriptorInfos[i] = cachedDescriptorInfos[set][i];
+			uint32_t index = i + descriptorSetInfo.start;
+			if (descriptorSetInfo.mask & (1 << index))
+				descriptorInfos[i] = cachedDescriptorInfos[set][index];
 		}
 
 		return descriptorInfos;
@@ -331,6 +332,9 @@ namespace Niagara
 		std::vector<VkWriteDescriptorSet> descriptorSets;
 
 		const auto& descriptorSetInfo = descriptorSetInfos[set];
+
+		if (descriptorSetInfo.count == 0)
+			return descriptorSets;
 
 		VkWriteDescriptorSet descriptorSet{};
 		descriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

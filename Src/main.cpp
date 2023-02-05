@@ -28,14 +28,60 @@
 
 using namespace Niagara;
 
-
+#define DEBUG_SINGLE_DRAWCALL 1
+#define TOY_FOR_FUN 1
 const std::string g_ResourcePath = "../Resources/";
 const std::string g_ShaderPath = "./CompiledShaders/";
 
 GLFWwindow* g_Window = nullptr;
 VkExtent2D g_ViewportSize{};
-bool g_FramebufferResized = false;
 double g_DeltaTime = 0.0;
+bool g_FramebufferResized = false;
+bool g_DrawVisibilityInited = false;
+
+enum DebugParam
+{
+	DrawFrustumCulling = 0,
+	DrawOcclusionCulling,
+
+	MeshletConeCulling,
+	MeshletFrustumCulling,
+	MeshletOcclusionCulling,
+
+	TriBackfaceCulling,
+	TriSmallCulling,
+
+	ToyDraw,
+
+	ParamCount
+};
+
+struct DebugParams
+{
+	uint32_t params[ParamCount] = {};
+
+	// Default params
+	void Init()
+	{
+		params[DrawFrustumCulling] = 1;
+		params[DrawOcclusionCulling] = 0;
+		params[MeshletConeCulling] = 1;
+		params[MeshletFrustumCulling] = 1;
+		params[MeshletOcclusionCulling] = 0;
+		params[TriBackfaceCulling] = 1;
+		params[TriSmallCulling] = 1;
+
+		params[ToyDraw] = 0;
+	}
+
+	void SwitchParam(DebugParam param)
+	{
+		params[param] ^= 1;
+		printf("Param: %d - %d\n", param, params[param]);
+	}
+};
+DebugParams g_DebugParams{};
+
 
 // Window callbacks
 void FramebufferResizeCallback(GLFWwindow *window, int width, int height)
@@ -86,6 +132,31 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 		break;
 	case GLFW_KEY_DOWN:
 		cameraManip.KeyMotion(0, -factor, CameraManipulator::Actions::Pan);
+		break;
+
+	case GLFW_KEY_0:
+		g_DebugParams.SwitchParam(DebugParam::DrawFrustumCulling);
+		break;
+	case GLFW_KEY_1:
+		g_DebugParams.SwitchParam(DebugParam::DrawOcclusionCulling);
+		break;
+	case GLFW_KEY_2:
+		g_DebugParams.SwitchParam(DebugParam::MeshletConeCulling);
+		break;
+	case GLFW_KEY_3:
+		g_DebugParams.SwitchParam(DebugParam::MeshletFrustumCulling);
+		break;
+	case GLFW_KEY_4:
+		g_DebugParams.SwitchParam(DebugParam::MeshletOcclusionCulling);
+		break;
+	case GLFW_KEY_5:
+		g_DebugParams.SwitchParam(DebugParam::TriBackfaceCulling);
+		break;
+	case GLFW_KEY_6:
+		g_DebugParams.SwitchParam(DebugParam::TriSmallCulling);
+		break;
+	case GLFW_KEY_T:
+		g_DebugParams.SwitchParam(DebugParam::ToyDraw);
 		break;
 	}
 }
@@ -145,6 +216,9 @@ struct ShaderManager
 	Niagara::Shader cullComp;
 	Niagara::Shader buildHiZComp;
 
+	Shader toyMesh;
+	Shader toyFullScreenFrag;
+
 	void Init(const Niagara::Device& device)
 	{
 		meshTask.Load(device, g_ShaderPath + "SimpleMesh.task.spv");
@@ -154,6 +228,11 @@ struct ShaderManager
 
 		cullComp.Load(device, g_ShaderPath + "DrawCommand.comp.spv");
 		buildHiZComp.Load(device, g_ShaderPath + "HiZBuild.comp.spv");
+
+#if 1
+		toyMesh.Load(device, g_ShaderPath + "ToyMesh.mesh.spv");
+		toyFullScreenFrag.Load(device, g_ShaderPath + "ToyFullScreen.frag.spv");
+#endif
 	}
 
 	void Cleanup(const Niagara::Device& device)
@@ -165,6 +244,9 @@ struct ShaderManager
 
 		cullComp.Cleanup(device);
 		buildHiZComp.Cleanup(device);
+
+		toyMesh.Cleanup(device);
+		toyFullScreenFrag.Cleanup(device);
 	}
 };
 ShaderManager g_ShaderMgr{};
@@ -176,6 +258,8 @@ struct CommonStates
 	Niagara::Sampler linearRepeatSampler;
 	Niagara::Sampler pointClampSampler;
 	Niagara::Sampler pointRepeatSampler;
+	Sampler minClampSampler;
+	Sampler maxClampSampler;
 
 	void Init(const Niagara::Device &device)
 	{
@@ -183,6 +267,8 @@ struct CommonStates
 		linearRepeatSampler.Init(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
 		pointClampSampler.Init(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
 		pointRepeatSampler.Init(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+		minClampSampler.Init(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, 0.0f, VK_COMPARE_OP_NEVER, VK_SAMPLER_REDUCTION_MODE_MIN);
+		maxClampSampler.Init(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, 0.0f, VK_COMPARE_OP_NEVER, VK_SAMPLER_REDUCTION_MODE_MAX);
 	}
 
 	void Destroy(const Niagara::Device &device)
@@ -191,6 +277,8 @@ struct CommonStates
 		linearRepeatSampler.Destroy(device);
 		pointClampSampler.Destroy(device);
 		pointRepeatSampler.Destroy(device);
+		minClampSampler.Destroy(device);
+		maxClampSampler.Destroy(device);
 	}
 };
 CommonStates g_CommonStates{};
@@ -218,10 +306,8 @@ const std::vector<const char*> g_DeviceExtensions =
 	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 	VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
 	
-#if USE_MESHLETS
 	// VK_NV_MESH_SHADER_EXTENSION_NAME,
 	VK_EXT_MESH_SHADER_EXTENSION_NAME
-#endif
 };
 
 std::vector<VkDynamicState> g_DynamicStates =
@@ -241,7 +327,8 @@ enum DescriptorBindings : uint32_t
 
 	// TODO: put these another place
 	// Globals 
-	ViewUniformBuffer	= 6
+	ViewUniformBuffer	= 6,
+	DebugUniformBuffer,
 };
 
 
@@ -277,6 +364,7 @@ struct GpuBuffer
 	VkBuffer buffer = VK_NULL_HANDLE;
 	VkDeviceMemory memory = VK_NULL_HANDLE;
 	void* data = nullptr;
+	uint32_t offset = 0;
 	size_t size = 0;
 	uint32_t stride = 0;
 	uint32_t elementCount = 0;
@@ -363,6 +451,8 @@ struct GpuBuffer
 		if (buffer != VK_NULL_HANDLE)
 			vkDestroyBuffer(device, buffer, nullptr);
 	}
+
+	operator VkBuffer() const { buffer; }
 };
 
 struct alignas(16) ViewUniformBufferParameters
@@ -374,6 +464,7 @@ struct alignas(16) ViewUniformBufferParameters
 	glm::vec4 frustumValues; // X L/R plane -> (+/-X, 0, Z, 0), Y U/D plane -> (0, +/-Y, Z, 0)
 	glm::vec4 zNearFar; // x - near, y - far, zw - not used
 	glm::vec4 viewportRect;
+	glm::vec4 depthPyramidSize;
 	glm::vec4 debugValue;
 	glm::vec3 camPos;
 	uint32_t drawCount;
@@ -384,6 +475,7 @@ struct BufferManager
 {
 	// Uniform buffers
 	GpuBuffer viewUniformBuffer;
+	GpuBuffer debugUniformBuffer;
 
 	// Storage buffers
 	GpuBuffer vertexBuffer;
@@ -392,6 +484,7 @@ struct BufferManager
 	GpuBuffer drawDataBuffer;
 	GpuBuffer drawArgsBuffer;
 	GpuBuffer drawCountBuffer;
+	GpuBuffer drawVisibilityBuffer;
 
 #if USE_MESHLETS
 	GpuBuffer meshletBuffer;
@@ -411,7 +504,6 @@ struct BufferManager
 			colorFormat,
 			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
 			0);
-		auto colorView = colorBuffer.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
 
 		// Depth texture
 		depthBuffer.Init(
@@ -420,7 +512,6 @@ struct BufferManager
 			depthFormat,
 			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
 			0);
-		auto depthView = depthBuffer.CreateImageView(device, VK_IMAGE_VIEW_TYPE_2D);
 
 		// Depth pyramid
 		glm::uvec2 hzbSize;
@@ -440,6 +531,7 @@ struct BufferManager
 	{
 		// Uniform buffers
 		viewUniformBuffer.Destroy(device);
+		debugUniformBuffer.Destroy(device);
 
 		// Storage buffers
 		vertexBuffer.Destroy(device);
@@ -448,6 +540,7 @@ struct BufferManager
 		drawDataBuffer.Destroy(device);
 		drawArgsBuffer.Destroy(device);
 		drawCountBuffer.Destroy(device);
+		drawVisibilityBuffer.Destroy(device);
 
 #if USE_MESHLETS
 		meshletBuffer.Destroy(device);
@@ -470,6 +563,8 @@ struct PipelineManager
 	Niagara::ComputePipeline updateDrawArgsPipeline;
 	Niagara::ComputePipeline buildDepthPyramidPipeline;
 
+	GraphicsPipeline toyDrawPipeline;
+
 	void Cleanup(const Niagara::Device &device)
 	{
 		meshDrawPipeline.Destroy(device);
@@ -477,6 +572,8 @@ struct PipelineManager
 		buildDepthPyramidPipeline.Destroy(device);
 
 		meshDrawPass.Destroy(device);
+
+		toyDrawPipeline.Destroy(device);
 	}
 };
 PipelineManager g_PipelineMgr{};
@@ -663,30 +760,140 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	g_CommandContext.BeginCommandBuffer(cmd);
 
 	// Globals
-	auto viewUniformBufferParams = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
+	auto viewUniformBufferInfo = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
+	auto debugUniformBufferInfo = DescriptorInfo(g_BufferMgr.debugUniformBuffer.buffer, VkDeviceSize(g_BufferMgr.debugUniformBuffer.offset), VkDeviceSize(g_BufferMgr.debugUniformBuffer.size));
 
 	const auto& meshBuffer = g_BufferMgr.meshBuffer;
 	const auto& drawDataBuffer = g_BufferMgr.drawDataBuffer;
 	const auto& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
 	const auto& drawCountBuffer = g_BufferMgr.drawCountBuffer;
+	const auto& drawVisibilityBuffer = g_BufferMgr.drawVisibilityBuffer;
 
-	Niagara::DescriptorInfo meshBufferDescInfo(meshBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshBuffer.size));
-	Niagara::DescriptorInfo drawBufferDescInfo(drawDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawDataBuffer.size));
-	Niagara::DescriptorInfo drawArgsDescInfo(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size));
+	Niagara::DescriptorInfo meshBufferDescInfo(meshBuffer.buffer, VkDeviceSize(meshBuffer.offset), VkDeviceSize(meshBuffer.size));
+	Niagara::DescriptorInfo drawBufferDescInfo(drawDataBuffer.buffer, VkDeviceSize(drawDataBuffer.offset), VkDeviceSize(drawDataBuffer.size));
+	Niagara::DescriptorInfo drawArgsDescInfo(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.offset), VkDeviceSize(drawArgsBuffer.size));
+	DescriptorInfo drawVisibilityInfo(drawVisibilityBuffer.buffer, VkDeviceSize(drawVisibilityBuffer.offset), VkDeviceSize(drawVisibilityBuffer.size));
 
 	uint32_t groupsX = 1, groupsY = 1, groupsZ = 1;
 
+	if (!g_DrawVisibilityInited)
+	{
+		vkCmdFillBuffer(cmd, drawVisibilityBuffer.buffer, VkDeviceSize(drawVisibilityBuffer.offset), VkDeviceSize(drawVisibilityBuffer.size), 0);
+
+		g_CommandContext.BufferBarrier2(drawVisibilityBuffer.buffer, VkDeviceSize(drawVisibilityBuffer.offset), VkDeviceSize(drawVisibilityBuffer.size),
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+		g_CommandContext.PipelineBarriers2(cmd);
+
+		g_DrawVisibilityInited = true;
+	}
+
 	// Init indirect draw count
 	{
-		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(4), 0);
+		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size), 0);
 
-		g_CommandContext.BufferBarrier(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(0),
-			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size),
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
 
-		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		g_CommandContext.PipelineBarriers2(cmd);
 	}
 
 	// Update draw args
+	auto cull = [&](uint32_t pass = 0)
+	{
+		const uint32_t GroupSize = 64;
+
+		VkDeviceSize drawCountOffset = drawCountBuffer.offset + pass * drawCountBuffer.stride;
+		VkDeviceSize drawCountSize = drawCountBuffer.stride;
+
+#if 0
+		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(drawCountBuffer.offset),
+			VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+			VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+		g_CommandContext.PipelineBarriers2(cmd);
+
+		// Init draw call count
+		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, drawCountOffset, drawCountSize, 0);
+
+		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(drawCountBuffer.offset),
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT || VK_ACCESS_2_SHADER_WRITE_BIT);
+		g_CommandContext.BufferBarrier2(drawDataBuffer.buffer, VkDeviceSize(drawDataBuffer.size), VkDeviceSize(drawDataBuffer.offset),
+			VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT || VK_ACCESS_2_SHADER_WRITE_BIT);
+
+		g_CommandContext.PipelineBarriers2(cmd);
+#endif
+
+		auto rasterizationStage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+
+		// Update draw args
+		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.updateDrawArgsPipeline);
+
+		// Uniforms
+		g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferInfo);
+		g_CommandContext.SetDescriptor(DescriptorBindings::DebugUniformBuffer, debugUniformBufferInfo);
+
+		g_CommandContext.SetDescriptor(0, meshBufferDescInfo);
+		g_CommandContext.SetDescriptor(1, drawBufferDescInfo);
+
+		g_CommandContext.BufferBarrier2(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.offset), VkDeviceSize(drawArgsBuffer.size),
+			VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | rasterizationStage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+			VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+		g_CommandContext.SetDescriptor(2, drawArgsDescInfo);
+
+		Niagara::DescriptorInfo drawCountDescInfo(drawCountBuffer.buffer, drawCountOffset, drawCountSize);
+		g_CommandContext.SetDescriptor(3, drawCountDescInfo);
+
+		g_CommandContext.SetDescriptor(4, drawVisibilityInfo);
+
+		const auto& depthPyramid = g_BufferMgr.depthPyramid;
+		VkImageSubresourceRange subresourceRange = { depthPyramid.subresource.aspectMask, 0, depthPyramid.subresource.mipLevel, 0, depthPyramid.subresource.arrayLayer };
+		if (pass == 0)
+		{
+			g_CommandContext.ImageBarrier2(depthPyramid.image, subresourceRange,
+				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+				VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT);
+		}
+		else
+		{
+			g_CommandContext.ImageBarrier2(depthPyramid.image, subresourceRange,
+				VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+				VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		}
+		DescriptorInfo depthPyramidInfo(g_CommonStates.minClampSampler, depthPyramid.views[0], VK_IMAGE_LAYOUT_GENERAL);
+		g_CommandContext.SetDescriptor(5, depthPyramidInfo);
+
+		g_CommandContext.PipelineBarriers2(cmd);
+
+		g_CommandContext.PushDescriptorSetWithTemplate(cmd);
+
+		struct States
+		{
+			uint32_t pass;
+		};
+		States states = { pass };
+		g_CommandContext.PushConstants(cmd, "_States", 0, sizeof(states), &states);
+
+		groupsX = Niagara::DivideAndRoundUp(drawArgsBuffer.elementCount, GroupSize);
+		vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
+
+		g_CommandContext.BufferBarrier2(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size), 
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+			VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, drawCountOffset, drawCountSize,
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+			VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+
+		g_CommandContext.PipelineBarriers2(cmd);
+	};
+
+#if 0
 	{
 		const uint32_t GroupSize = 32;
 
@@ -696,23 +903,28 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.SetDescriptor(1, drawBufferDescInfo);
 		g_CommandContext.SetDescriptor(2, drawArgsDescInfo);
 		
-		Niagara::DescriptorInfo drawCountDescInfo(drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawCountBuffer.size));
+		Niagara::DescriptorInfo drawCountDescInfo(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size));
 		g_CommandContext.SetDescriptor(3, drawCountDescInfo);
 
-		g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferParams);
+		g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferInfo);
+		g_CommandContext.SetDescriptor(DescriptorBindings::DebugUniformBuffer, debugUniformBufferInfo);
 
 		g_CommandContext.PushDescriptorSetWithTemplate(cmd);
 
 		groupsX = Niagara::DivideAndRoundUp(drawArgsBuffer.elementCount, GroupSize);
 		vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
 
-		g_CommandContext.BufferBarrier(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.size), VkDeviceSize(0),
+		g_CommandContext.BufferBarrier(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size),
 			VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
-		g_CommandContext.BufferBarrier(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(0),
+		g_CommandContext.BufferBarrier(drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawCountBuffer.size),
 			VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
 
 		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
 	}
+
+#else
+	cull(0);
+#endif
 
 	// Mesh draw pipeline
 	auto &colorBuffer = g_BufferMgr.colorBuffer;
@@ -769,14 +981,15 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	// Descriptors
 
 	// Globals
-	g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferParams, 0);
+	g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferInfo, 0);
+	g_CommandContext.SetDescriptor(DescriptorBindings::DebugUniformBuffer, debugUniformBufferInfo, 0);
 
 	// Meshes
 	const auto& vb = g_BufferMgr.vertexBuffer;
 	const auto& ib = g_BufferMgr.indexBuffer;
 
 #if VERTEX_INPUT_MODE == 1
-	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(0), VkDeviceSize(vb.size));
+	auto vbInfo = Niagara::DescriptorInfo(vb.buffer, VkDeviceSize(vb.offset), VkDeviceSize(vb.size));
 	g_CommandContext.SetDescriptor(DescriptorBindings::VertexBuffer, vbInfo);
 
 #if USE_MESHLETS
@@ -844,22 +1057,31 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 	g_CommandContext.EndRenderPass(cmd);
 
-#if 1
 	// Generate depth pyramid
 	{
 		const auto& depthPyramid = g_BufferMgr.depthPyramid;
 		
 		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.buildDepthPyramidPipeline);
 
-		g_CommandContext.ImageBarrier(depthBuffer.image, 
-			depthAspectFlags,
+		g_CommandContext.ImageBarrier2(depthBuffer.image, depthAspectFlags,
 			depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+			VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+			VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-		VkImageSubresourceRange subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VkImageSubresourceRange subresourceRange = { depthPyramid.subresource.aspectMask, 0, depthPyramid.subresource.mipLevel, 0, depthPyramid.subresource.arrayLayer };
+
+		g_CommandContext.ImageBarrier2(depthPyramid.image, subresourceRange,
+			VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+			VK_ACCESS_2_SHADER_READ_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+		g_CommandContext.PipelineBarriers2(cmd);
+
 		VkImageView srcImageView = VK_NULL_HANDLE;
 		uint32_t w = depthPyramid.extent.width, h = depthPyramid.extent.height;
 		const uint32_t GroupSize = 8;
+
+		subresourceRange.levelCount = 1;
 
 		struct Constants
 		{
@@ -867,6 +1089,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 			glm::vec2 viewportMaxBoundUV;
 		} constants{};
 
+		uint32_t viewIndexOffset = 1;
 		for (uint32_t i = 0; i < depthPyramid.subresource.mipLevel; ++i)
 		{
 			constants.viewportMaxBoundUV = glm::vec2(1.0f, 1.0f);
@@ -881,13 +1104,17 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 				constants.srcSize = Niagara::GetSizeAndInvSize(depthBuffer.extent.width, depthBuffer.extent.height);
 
-				g_CommandContext.ImageBarrier(depthPyramid.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT);
+				// TODO: delete this
+				/*g_CommandContext.ImageBarrier2(depthPyramid.image, VK_IMAGE_ASPECT_COLOR_BIT, 
+					VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, 
+					VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+					VK_ACCESS_2_SHADER_READ_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
-				g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+				g_CommandContext.PipelineBarriers2(cmd);*/
 			}
 			else
 			{
-				srcImageView = depthPyramid.views[i-1].view;
+				srcImageView = depthPyramid.views[i-1 + viewIndexOffset].view;
 
 				srcLayout = VK_IMAGE_LAYOUT_GENERAL;
 
@@ -896,8 +1123,9 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 				subresourceRange.baseMipLevel = i-1;
 				g_CommandContext.ImageBarrier(depthPyramid.image, subresourceRange, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-				subresourceRange.baseMipLevel = i;
-				g_CommandContext.ImageBarrier(depthPyramid.image, subresourceRange, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT);
+				// TODO: delete this
+				// subresourceRange.baseMipLevel = i;
+				// g_CommandContext.ImageBarrier(depthPyramid.image, subresourceRange, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT);
 
 				g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
@@ -908,7 +1136,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 			g_CommandContext.PushConstants(cmd, "_Constants", 0, sizeof(constants), &constants);
 
 			g_CommandContext.SetDescriptor(0, Niagara::DescriptorInfo(g_CommonStates.linearClampSampler.sampler, srcImageView, srcLayout));
-			g_CommandContext.SetDescriptor(1, Niagara::DescriptorInfo(VK_NULL_HANDLE, depthPyramid.views[i].view, VK_IMAGE_LAYOUT_GENERAL));
+			g_CommandContext.SetDescriptor(1, Niagara::DescriptorInfo(VK_NULL_HANDLE, depthPyramid.views[i+viewIndexOffset].view, VK_IMAGE_LAYOUT_GENERAL));
 
 			g_CommandContext.PushDescriptorSetWithTemplate(cmd, 0);
 
@@ -918,7 +1146,41 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		}
 	}
 
-#endif
+	// Toy draw pass
+	auto toyDraw = [&](VkCommandBuffer cmd, Image &colorBuffer, VkImageLayout oldLayout, VkPipelineStageFlags2 srcStageMask, VkAccessFlagBits2 srcAccessMask)
+	{
+		VkImageLayout newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		if (oldLayout != newLayout)
+		{
+			g_CommandContext.ImageBarrier2(colorBuffer.image, VK_IMAGE_ASPECT_COLOR_BIT,
+				oldLayout, newLayout, srcStageMask, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+				srcAccessMask, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+			g_CommandContext.PipelineBarriers2(cmd);
+		}
+
+		CommandContext::Attachment attachment(&colorBuffer.views[0], newLayout);
+		LoadStoreInfo loadStoreInfo(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+		g_CommandContext.SetAttachments(&attachment, 1, &loadStoreInfo, nullptr);
+
+		g_CommandContext.BeginRendering(cmd, viewportRect);
+
+		vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
+		vkCmdSetScissor(cmd, 0, 1, &viewportRect);
+
+		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.toyDrawPipeline);
+
+		g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferInfo);
+
+		// TODO: Errors with push template
+		// g_CommandContext.PushDescriptorSetWithTemplate(cmd);
+		g_CommandContext.PushDescriptorSet(cmd, 0);
+
+		vkCmdDrawMeshTasksEXT(cmd, 1, 1, 1);
+
+		g_CommandContext.EndRendering(cmd);
+	};
+	if (g_DebugParams.params[DebugParam::ToyDraw])
+		toyDraw(cmd, colorBuffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
 	// Update backbuffer
 	{
@@ -1159,7 +1421,6 @@ int main()
 	*pNext = &features13;
 	pNext = &features11.pNext;
 
-#if USE_MESHLETS
 	VkPhysicalDeviceMeshShaderFeaturesEXT featureMeshShader{};
 	featureMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
 	featureMeshShader.meshShader = VK_TRUE;
@@ -1167,7 +1428,6 @@ int main()
 
 	*pNext = &featureMeshShader;
 	pNext = &featureMeshShader.pNext;
-#endif
 
 #if USE_FRAGMENT_SHADING_RATE
 	VkPhysicalDeviceFragmentShadingRateFeaturesKHR featureSR{};
@@ -1240,12 +1500,25 @@ int main()
 	GetMeshDrawPipeline(device, pipeline, meshDrawPass, 0, { {0, 0}, renderExtent });
 
 	Niagara::ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
-	updateDrawArgsPipeline.compShader = &g_ShaderMgr.cullComp;
-	updateDrawArgsPipeline.Init(device);
+	{
+		updateDrawArgsPipeline.compShader = &g_ShaderMgr.cullComp;
+		updateDrawArgsPipeline.Init(device);
+	}
 
 	Niagara::ComputePipeline& buildDepthPyramidPipeline = g_PipelineMgr.buildDepthPyramidPipeline;
-	buildDepthPyramidPipeline.compShader = &g_ShaderMgr.buildHiZComp;
-	buildDepthPyramidPipeline.Init(device);
+	{
+		buildDepthPyramidPipeline.compShader = &g_ShaderMgr.buildHiZComp;
+		buildDepthPyramidPipeline.Init(device);
+	}
+
+	GraphicsPipeline& toyDrawPipeline = g_PipelineMgr.toyDrawPipeline;
+	{
+		toyDrawPipeline.meshShader = &g_ShaderMgr.toyMesh;
+		toyDrawPipeline.fragShader = &g_ShaderMgr.toyFullScreenFrag;
+		std::vector<VkFormat> colorAttachmentFormats = { colorFormat };
+		toyDrawPipeline.SetAttachments(colorAttachmentFormats.data(), static_cast<uint32_t>(colorAttachmentFormats.size()));
+		toyDrawPipeline.Init(device);
+	}
 
 	// Command buffers
 
@@ -1278,11 +1551,19 @@ int main()
 	VkMemoryPropertyFlags deviceLocalMemPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 	
 	// Uniforms
+	const auto& depthPyramid = g_BufferMgr.depthPyramid;
 	g_ViewUniformBufferParameters.viewportRect = glm::vec4(0.0f, 0.0f, renderExtent.width, renderExtent.height);
+	g_ViewUniformBufferParameters.depthPyramidSize = glm::vec4(renderExtent.width / 2, renderExtent.height / 2, // depth pyramid viewport size
+		depthPyramid.extent.width, depthPyramid.extent.height); // depth pyramid buffer size
 	g_ViewUniformBufferParameters.debugValue = glm::vec4(1.0f); // glm::vec4(0.8, 0.2, 0.2, 1);
+
+	g_DebugParams.Init();
 
 	auto& viewUniformBuffer = g_BufferMgr.viewUniformBuffer;
 	viewUniformBuffer.Init(device, sizeof(ViewUniformBufferParameters), 1, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
+
+	auto& debugUniformBuffer = g_BufferMgr.debugUniformBuffer;
+	debugUniformBuffer.Init(device, sizeof(DebugParams), 1, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostVisibleMemPropertyFlags);
 
 	// Geometry
 	Geometry geometry{};
@@ -1317,10 +1598,16 @@ int main()
 	// Indirect draw command buffers
 #if USE_MULTI_DRAW_INDIRECT
 	// Preparing indirect draw commands
+#if DEBUG_SINGLE_DRAWCALL
+	const uint32_t DrawCount = 3; //  DRAW_COUNT;
+#else
 	const uint32_t DrawCount = DRAW_COUNT;
+#endif
 	const float SceneRadius = SCENE_RADIUS;
 
 	g_ViewUniformBufferParameters.drawCount = DrawCount;
+
+	std::vector<glm::vec2> xyOffsets{ glm::vec2(0.0f), glm::vec2(3.0f, 0.0f), glm::vec2(-1.8f, 2.0f) };
 
 	std::vector<MeshDraw> meshDraws(DrawCount);
 	for (uint32_t i = 0; i < DrawCount; ++i)
@@ -1335,6 +1622,12 @@ int main()
 		auto axis = glm::sphericalRand(1.0f);
 		auto r = glm::quat(cosf(theta), axis * sinf(theta));
 
+#if DEBUG_SINGLE_DRAWCALL
+		t = glm::vec3(xyOffsets[i], +7.5f);
+		s = glm::vec3(1.0f);
+		r = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+#endif
+
 		glm::mat4 worldMat = glm::translate(glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), s), t);
 		draw.worldMatRow0 = glm::vec4(worldMat[0][0], worldMat[1][0], worldMat[2][0], worldMat[3][0]);
 		draw.worldMatRow1 = glm::vec4(worldMat[0][1], worldMat[1][1], worldMat[2][1], worldMat[3][1]);
@@ -1347,6 +1640,7 @@ int main()
 		draw.meshIndex = meshId;
 		draw.vertexOffset = mesh.vertexOffset;
 	}
+
 	// Indirect draw command buffer
 	GpuBuffer& drawBuffer = g_BufferMgr.drawDataBuffer;
 	drawBuffer.Init(device, sizeof(MeshDraw), static_cast<uint32_t>(meshDraws.size()), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1355,8 +1649,12 @@ int main()
 	GpuBuffer& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
 	drawArgsBuffer.Init(device, sizeof(MeshDrawCommand), DrawCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, deviceLocalMemPropertyFlags);
 
+	const uint32_t maxPassCount = 2;
 	GpuBuffer& drawCountBuffer = g_BufferMgr.drawCountBuffer;
-	drawCountBuffer.Init(device, 4, 1, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
+	drawCountBuffer.Init(device, 4, maxPassCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
+
+	GpuBuffer& drawVisibilityBuffer = g_BufferMgr.drawVisibilityBuffer;
+	drawVisibilityBuffer.Init(device, 4, DrawCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 #endif
 
 #if USE_MESHLETS
@@ -1381,10 +1679,12 @@ int main()
 		renderExtent = swapchain.extent;
 		colorFormat = swapchain.colorFormat;
 
-		g_ViewUniformBufferParameters.viewportRect = glm::vec4(0.0f, 0.0f, renderExtent.width, renderExtent.height);
-
 		// recreate view dependent textures
 		g_BufferMgr.InitViewDependentBuffers(device, renderExtent, colorFormat, depthFormat);
+
+		g_ViewUniformBufferParameters.viewportRect = glm::vec4(0.0f, 0.0f, renderExtent.width, renderExtent.height);
+		g_ViewUniformBufferParameters.depthPyramidSize = glm::vec4(renderExtent.width / 2, renderExtent.height / 2, // depth pyramid viewport size
+			depthPyramid.extent.width, depthPyramid.extent.height); // depth pyramid buffer size
 
 		// Recreate framebuffers
 		{
@@ -1445,6 +1745,8 @@ int main()
 		// Max draw distance
 		g_ViewUniformBufferParameters.frustumPlanes[5] = glm::vec4(0, 0, -1, -MAX_DRAW_DISTANCE);
 		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters), 1);
+
+		debugUniformBuffer.Update(device, &g_DebugParams, sizeof(g_DebugParams), 1);
 
 		// Get resources
 		SyncObjects &currentSyncObjects = frameResources[currentFrame].syncObjects;

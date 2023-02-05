@@ -244,6 +244,12 @@
     <CustomBuild Include="..\Shaders\SimpleMesh.task.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
+    <CustomBuild Include="..\Shaders\ToyFullScreen.frag.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\ToyMesh.mesh.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">

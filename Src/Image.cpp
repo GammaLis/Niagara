@@ -68,9 +68,12 @@ namespace Niagara
 
 		// Reduction mode, eg. min depth pyramid
 		VkSamplerReductionModeCreateInfo reductionModeCreateInfo{};
-		reductionModeCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO;
-		reductionModeCreateInfo.reductionMode = reductionMode;
-		createInfo.pNext = &reductionModeCreateInfo;
+		if (reductionMode != VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE)
+		{
+			reductionModeCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO;
+			reductionModeCreateInfo.reductionMode = reductionMode;
+			createInfo.pNext = &reductionModeCreateInfo;
+		}
 		
 		VK_CHECK(vkCreateSampler(device, &createInfo, nullptr, &sampler));
 		assert(sampler);
@@ -120,6 +123,24 @@ namespace Niagara
 		return type;
 	}
 
+	static VkImageViewType GetImageViewType(VkImageType imageType, uint32_t arrayLayers = 1, bool cubeImage = false)
+	{
+		switch (imageType)
+		{
+		case VK_IMAGE_TYPE_1D:
+			return arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+		case VK_IMAGE_TYPE_2D:
+			return arrayLayers > 1 ? 
+				cubeImage && arrayLayers == 6 ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D_ARRAY : 
+				VK_IMAGE_VIEW_TYPE_2D;
+		case VK_IMAGE_TYPE_3D:
+			return VK_IMAGE_VIEW_TYPE_3D;
+		default:
+			throw std::runtime_error("No image view type found.");
+			return VK_IMAGE_VIEW_TYPE_2D;
+		}
+	}
+
 	/**
 	* Tiling
 	* * VK_IMAGE_TILING_LINEAR: Texels are laid out in row-major order 
@@ -143,6 +164,7 @@ namespace Niagara
 
 		subresource.arrayLayer = arrayLayers;
 		subresource.mipLevel = mipLevels;
+		subresource.aspectMask = IsDepthStencilFormat(format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
 		VkImageCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -183,6 +205,9 @@ namespace Niagara
 		assert(memory);
 
 		vkBindImageMemory(device, image, memory, 0);
+
+		// Create default view
+		CreateImageView(device, GetImageViewType(type, arrayLayers), 0, 0, mipLevels, arrayLayers);
 	}
 
 	void Image::Destroy(const Device& device)
