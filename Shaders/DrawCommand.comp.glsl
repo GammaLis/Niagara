@@ -106,7 +106,7 @@ void main()
 		bVisible = bVisible && !FrustumCull(boundingSphere);
 
 	// Only doing oc in late pass
-	if (_DebugParams.drawOcclusionCulling > 0 && _States.pass > 0)
+	if (_DebugParams.drawOcclusionCulling > 0 && pass > 0)
 		bVisible = bVisible && !OcclusionCull(boundingSphere);
 
 #if USE_SUBGROUP

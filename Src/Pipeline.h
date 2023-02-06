@@ -231,7 +231,7 @@ namespace Niagara
 				(vertShader != nullptr && vertShader->IsValid()|| meshShader != nullptr && meshShader->IsValid());
 		}
 
-		void SetAttachments(VkFormat* pColorAttachmentFormats, uint32_t colorAttachmentCount, VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED);
+		void SetAttachments(const VkFormat* pColorAttachmentFormats, uint32_t colorAttachmentCount, VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED);
 	};
 
 	class ComputePipeline : public Pipeline

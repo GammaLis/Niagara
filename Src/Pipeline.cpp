@@ -161,6 +161,10 @@ namespace Niagara
 		if (it == setResources.end())
 			return entries;
 
+		uint32_t bindingStart = 0xFF;
+		for (const auto& resource : it->second)
+			bindingStart = std::min(bindingStart, resource.binding);
+
 		for (const auto& resource : it->second)
 		{
 			VkDescriptorUpdateTemplateEntry entry{};
@@ -169,7 +173,7 @@ namespace Niagara
 			entry.descriptorCount = resource.arraySize;
 			entry.dstArrayElement = 0;
 			entry.stride = sizeof(DescriptorInfo);
-			entry.offset = entry.stride * resource.binding;
+			entry.offset = entry.stride * (resource.binding - bindingStart);
 
 			entries.push_back(entry);
 		}
@@ -454,7 +458,7 @@ namespace Niagara
 		Pipeline::Destroy(device);
 	}
 
-	void GraphicsPipeline::SetAttachments(VkFormat* pColorAttachmentFormats, uint32_t colorAttachmentCount, VkFormat depthAttachmentFormat)
+	void GraphicsPipeline::SetAttachments(const VkFormat* pColorAttachmentFormats, uint32_t colorAttachmentCount, VkFormat depthAttachmentFormat)
 	{
 		if (colorAttachmentCount > 0)
 		{

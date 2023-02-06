@@ -85,6 +85,7 @@ vec3 IntToColor(uint Index)
 bool FrustumCull(vec4 boundingSphere)
 {
     bool culled = false;
+    // L/R/T/B
 #if 0
     for (uint i = 0; i < 4; ++i)
     {
@@ -93,10 +94,11 @@ bool FrustumCull(vec4 boundingSphere)
             return true;
     }
 #else
-    culled =           abs(boundingSphere.x) * _View.frustumValues.x + boundingSphere.z * _View.frustumValues.y > boundingSphere.w;
-    culled = culled || abs(boundingSphere.y) * _View.frustumValues.z + boundingSphere.z * _View.frustumValues.w > boundingSphere.w;
-    culled = culled || (-boundingSphere.z + boundingSphere.w < _View.zNearFar.x) || (-boundingSphere.z - boundingSphere.w > _View.zNearFar.y);
+    culled =           -abs(boundingSphere.x) * _View.frustumValues.x + boundingSphere.z * _View.frustumValues.y > boundingSphere.w;
+    culled = culled || -abs(boundingSphere.y) * _View.frustumValues.z + boundingSphere.z * _View.frustumValues.w > boundingSphere.w;
 #endif
+    // Near/Far
+    culled = culled || (boundingSphere.z - boundingSphere.w > -_View.zNearFar.x) || (boundingSphere.z + boundingSphere.w < -_View.zNearFar.y);
 
     return culled;
 }

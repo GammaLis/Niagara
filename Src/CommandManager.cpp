@@ -223,6 +223,7 @@ namespace Niagara
 		// A single depth stencil attachment info can be used, but they can also be specified separately.
 		// When both are specified separately, the only requirement is that the image view is identical.
 		VkRenderingAttachmentInfo depthAttachmentInfo{};
+		depthAttachmentInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 
 		if (cachedDepthAttachment.view != nullptr)
 		{

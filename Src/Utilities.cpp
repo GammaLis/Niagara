@@ -32,7 +32,7 @@ namespace Niagara
 	static glm::vec4 NormalizePlane(const glm::vec4& plane)
 	{
 		float len = length(glm::vec3(plane));
-		return plane / (len < 1e-3 ? 1 : len);
+		return plane / (len < 1e-3f ? 1 : len);
 	}
 
 	void GetFrustumPlanes(glm::vec4 frustumPlanes[], const glm::mat4& matrix, bool reversedZ, bool needZPlanes)
