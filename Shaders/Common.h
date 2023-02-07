@@ -50,7 +50,7 @@ vec3 GetScaleFromWorldMatrix(mat4 worldMatrix)
 float ConvertToDeviceZ(float sceneDepth)
 {
     // Perspective
-    return -_View.projMatrix[2][2] + _View.projMatrix[3][2] / sceneDepth;
+    return -_View.projMatrix[2][2] - _View.projMatrix[3][2] / sceneDepth; // or abs(...)
 }
 
 

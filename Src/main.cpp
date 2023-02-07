@@ -63,8 +63,8 @@ struct DebugParams
 	// Default params
 	void Init()
 	{
-		params[DrawFrustumCulling] = 1;
-		params[DrawOcclusionCulling] = 0;
+		params[DrawFrustumCulling] = 0;
+		params[DrawOcclusionCulling] = 1;
 		params[MeshletConeCulling] = 1;
 		params[MeshletFrustumCulling] = 1;
 		params[MeshletOcclusionCulling] = 0;
@@ -1140,6 +1140,10 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.SetDescriptor(3, drawCountBufferInfo);
 		g_CommandContext.SetDescriptor(4, drawVisibilityInfo);
 
+		const auto& depthPyramid = g_BufferMgr.depthPyramid;
+		DescriptorInfo depthPyramidInfo(g_CommonStates.minClampSampler, depthPyramid.views[0], VK_IMAGE_LAYOUT_GENERAL); // pointClampSampler
+		g_CommandContext.SetDescriptor(5, depthPyramidInfo);
+
 		g_CommandContext.PushDescriptorSetWithTemplate(cmd); // or g_CommandContext.PushDescriptorSet(cmd, 0);
 
 		vkCmdDrawMeshTasksEXT(cmd, 1, 1, 1);
@@ -1566,7 +1570,7 @@ int main()
 #if USE_MULTI_DRAW_INDIRECT
 	// Preparing indirect draw commands
 #if DEBUG_SINGLE_DRAWCALL
-	const uint32_t DrawCount = 4; //  DRAW_COUNT;
+	const uint32_t DrawCount = 5; //  DRAW_COUNT;
 #else
 	const uint32_t DrawCount = DRAW_COUNT;
 #endif
@@ -1574,11 +1578,11 @@ int main()
 
 	g_ViewUniformBufferParameters.drawCount = DrawCount;
 
-	float testZ = 8.0f, farZ = -8.0f;
+	float testZ = 8.0f, farZ = -10.0f;
 	std::vector<glm::vec3> positions
 	{ 
-		glm::vec3(0.0f, 0.0f, testZ), glm::vec3(3.0f, 0.0f, testZ), glm::vec3(-1.8f, 2.0f, testZ),  
-		glm::vec3(0.0f, 0.0f, farZ) // occlusion culling test
+		glm::vec3(0.0f, 0.0f, testZ+0.5), glm::vec3(3.0f, 0.0f, testZ), glm::vec3(-1.8f, 2.0f, testZ),  
+		glm::vec3(0.0f, 0.0f, farZ), glm::vec3(1.0f, 0.0f, farZ)// occlusion culling test
 	};
 
 	std::vector<MeshDraw> meshDraws(DrawCount);

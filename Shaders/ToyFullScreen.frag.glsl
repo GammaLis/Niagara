@@ -25,6 +25,8 @@ layout (binding = 4) readonly buffer DrawVisibilities
 	uint drawVisibilities[];
 };
 
+layout (binding = 5) uniform sampler2D depthPyramid;
+
 
 layout (location = 0) in vec2 uv;
 
@@ -51,6 +53,8 @@ void main()
 
 	vec4 color =  vec4(uv, 0.0, 1.0);
 
+	color.rgb = vec3(0.0);
+
 	const uint MaxDrawCount = _View.drawCount;
 
 	const uint earlyDrawCount = drawCounts[0];
@@ -59,7 +63,10 @@ void main()
 	uint drawCount = earlyDrawCount + lateDrawCount;
 
 	bool insideBounds = false;
-	bool frustumCulled = drawCount < MaxDrawCount;
+	vec4 bounds = vec4(0.0);
+	vec4 cachedSphere = vec4(0.0);
+
+	bool culled = drawCount < MaxDrawCount;
 	uint culledDraws = 0;
 	
 #if 1
@@ -75,42 +82,60 @@ void main()
 		vec3 scale = GetScaleFromWorldMatrix(worldMatrix);
 		boundingSphere.w *= scale.x; // just uniform scale
 
-	#if 0
+	#if 1
 		vec4 aabb = vec4(0.0);
 		bool projected = GetAxisAlignedBoundingBox(boundingSphere, -_View.zNearFar.x, _View.projMatrix, aabb);
 		if (projected)
 		{
-			if (InsideBounds(fragUV, aabb))
+			if (InsideBounds(uv, aabb))
 			{
-				color.rgb = DebugColors[i & 7];
+				color.rgb = DebugColors[(i+1) & 7];
+				bounds = aabb;
+				cachedSphere = boundingSphere;
 				insideBounds = true;
-				break;
+				// break;
 			}
 		}
 
-	#else
-		frustumCulled = FrustumCull(boundingSphere);
-		culledDraws += frustumCulled ? 1 : 0;
+	#elif 0
+		// Frustum culling
+		culled = FrustumCull(boundingSphere);
+		culledDraws += culled ? 1 : 0;
 	#endif
 	}
 
-	color.rgb = DebugColors[culledDraws & 7];
+#if 0
+	// Occlusion culling
+	if (insideBounds)
+	{
+		float w = (bounds.z - bounds.x) * _View.depthPyramidSize.x;
+		float h = (bounds.w - bounds.y) * _View.depthPyramidSize.y;
+		vec2  c = (bounds.xy + bounds.zw) * 0.5;
 
+		vec2 depthPyramidRatio = _View.depthPyramidSize.xy / max(vec2(1.0), _View.depthPyramidSize.zw);
+		vec2 uv = c * depthPyramidRatio;
+
+		float level = floor(log2(max(w, h) * 0.8)); // 0.8 - debug value
+
+		// Sampler is set up to do min reduction, so this computes the minimum depth of a 2x2 texel quad
+		float depth = textureLod(depthPyramid, uv, level).x;
+		float sphereDepth = ConvertToDeviceZ(cachedSphere.z + cachedSphere.w);
+		culled = depth > sphereDepth;
+
+		color.rgb = culled ? vec3(0.2, 1.0, 1.0) : color.rgb;
+	}
+
+#elif 1
+	culledDraws = MaxDrawCount - drawCount;
+	color.rgb = DebugColors[culledDraws & 7];
+#endif
+	
 #endif
 
 #if 0
-	bool insideBound = false;
-	for (uint i = 0; i < 3; ++i)
-	{
-		vec4 aabb = vec4(0.0);
-		insideBound = GetAxisAlignedBoundingBox(_View.bounds[i], -_View.zNearFar.x, _View.projMatrix, aabb);
-		insideBound = insideBound && InsideBound(uv, aabb);
-		if (insideBound) break;
-	}
-
-	
-	if (insideBound)
-		color = vec4(1.0, 0.0, 0.0, 1.0);
+	vec2 hizUV = uv * _View.depthPyramidSize.xy / _View.depthPyramidSize.zw;
+	float depth = textureLod(DepthPyramid, hizUV, 0.0).x;
+	color.rgb = vec3(depth);
 #endif
 
 	outColor = color;

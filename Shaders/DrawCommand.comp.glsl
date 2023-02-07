@@ -64,7 +64,7 @@ bool OcclusionCull(vec4 boundingSphere)
     	float level = floor(log2(max(w, h)));
 
 		// Sampler is set up to do min reduction, so this computes the minimum depth of a 2x2 texel quad
-		float depth = textureLod(depthPyramid, c, level).x;
+		float depth = textureLod(depthPyramid, uv, level).x;
 		float sphereDepth = ConvertToDeviceZ(boundingSphere.z + boundingSphere.w);
 		culled = depth > sphereDepth;
     }
