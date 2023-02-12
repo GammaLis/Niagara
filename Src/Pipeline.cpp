@@ -2,6 +2,8 @@
 #include "Device.h"
 #include "RenderPass.h"
 
+// Ref: Vulkan-Samples
+
 namespace Niagara
 {
 	void Pipeline::GatherDescriptors()
@@ -46,6 +48,8 @@ namespace Niagara
 	void Pipeline::SpirvCrossGatherDescriptors()
 	{
 		pushConstants.clear();
+		specializationConstants.clear();
+
 		shaderResourceMap.clear();
 		setResources.clear();
 
@@ -61,8 +65,7 @@ namespace Niagara
 			{
 				if (shaderResource.type == ShaderResourceType::Input || 
 					shaderResource.type == ShaderResourceType::InputAttachment || 
-					shaderResource.type == ShaderResourceType::Output ||
-					shaderResource.type == ShaderResourceType::SpecializationConstant) // No binding point, not used yet
+					shaderResource.type == ShaderResourceType::Output)
 					continue;
 
 				// Push constants
@@ -74,6 +77,19 @@ namespace Niagara
 						it->second.stages |= shaderResource.stages;
 					else
 						pushConstants.emplace(shaderResource.name, shaderResource);
+
+					continue;
+				}
+
+				// Specialization constants
+				if (shaderResource.type == ShaderResourceType::SpecializationConstant) // No binding point
+				{
+					auto it = specializationConstants.find(shaderResource.constantId);
+
+					if (it != specializationConstants.end())
+						it->second.stages |= shaderResource.stages;
+					else
+						specializationConstants.emplace(shaderResource.constantId, shaderResource);
 
 					continue;
 				}
@@ -102,6 +118,7 @@ namespace Niagara
 		}
 
 		bUsePushConstants = !pushConstants.empty();
+		bUseSpecializationConstants = !specializationConstants.empty();
 	}
 
 	std::vector<VkPipelineShaderStageCreateInfo> Pipeline::GetShaderStagesCreateInfo() const
@@ -121,6 +138,7 @@ namespace Niagara
 				shaderStageCreateInfo.module = shader->module;
 				shaderStageCreateInfo.stage = shader->stage;
 				shaderStageCreateInfo.pName = shader->entryPoint.c_str();
+				shaderStageCreateInfo.pSpecializationInfo = specializationInfo.mapEntryCount > 0 ? &specializationInfo : nullptr;
 
 				shaderStagesCreateInfo.push_back(shaderStageCreateInfo);
 			}
@@ -289,6 +307,42 @@ namespace Niagara
 		return pipelineLayout;
 	}
 
+	VkSpecializationInfo Pipeline::CreateSpecializationInfo()
+	{
+		specializationMapEntries.clear();
+		specializationConsantData.clear();
+
+		VkSpecializationMapEntry entry{};
+
+		for (const auto& kvp : constantState.constantMap)
+		{
+			auto it = specializationConstants.find(kvp.first);
+
+			if (it != specializationConstants.end())
+			{
+				auto& constantResource = it->second;
+				entry.constantID = constantResource.constantId;
+				entry.offset = constantResource.offset;
+				entry.size = constantResource.size;
+
+				specializationMapEntries.push_back(entry);
+				specializationConsantData.push_back(kvp.second);
+			}
+		}
+
+		VkSpecializationInfo info{};
+
+		if (!specializationMapEntries.empty())
+		{
+			info.pMapEntries = specializationMapEntries.data();
+			info.mapEntryCount = static_cast<uint32_t>(specializationMapEntries.size());
+			info.pData = specializationConsantData.data();
+			info.dataSize = specializationConsantData.size() * sizeof(uint32_t);
+		}
+
+		return info;
+	}
+
 	void GraphicsPipelineState::Update()
 	{
 		// Vertex input state
@@ -350,7 +404,9 @@ namespace Niagara
 
 		if (bUsePushConstants)
 			this->pushConstantRanges = CreatePushConstantRanges();
-
+		if (bUseSpecializationConstants)
+			this->specializationInfo = CreateSpecializationInfo();
+		
 #else
 		GatherDescriptors();
 
@@ -391,6 +447,12 @@ namespace Niagara
 		{
 			vkDestroyPipeline(device, pipeline, nullptr);
 			pipeline = VK_NULL_HANDLE;
+		}
+
+		if (bUseSpecializationConstants)
+		{
+			constantState.Reset();
+			specializationInfo = {};
 		}
 	}
 

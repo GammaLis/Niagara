@@ -25,11 +25,14 @@
 #define MESH_GROUP_SIZE 32
 
 #define DESC_VERTEX_BUFFER 0
+// Not used in task/mesh shaders now
 #define DESC_MESH_BUFFER 1
 #define DESC_DRAW_DATA_BUFFER 2
 #define DESC_DRAW_COMMAND_BUFFER 3
 #define DESC_MESHLET_BUFFER 4
 #define DESC_MESHLET_DATA_BUFFER 5
+#define DESC_MESHLET_VISIBILITY_BUFFER 1
+#define DESC_DEPTH_PYRAMID 6
 
 
 struct Vertex
@@ -81,6 +84,7 @@ struct MeshDraw
 
 	int  vertexOffset;	
 	uint meshIndex;
+	uint meshletVisibilityOffset;
 };
 
 struct MeshDrawCommand
@@ -95,6 +99,9 @@ struct MeshDrawCommand
     uint firstInstance;
 
     // Used by mesh shading path
+    uint drawVisibility;
+    uint meshletVisibilityOffset;
+    
 #if defined(USE_NV_MESH_SHADER)
     // NV
     uint taskCount;
@@ -149,6 +156,7 @@ layout (binding = DESC_DEBUG_UNIFORMS) uniform DebugParams
 	uint triBackfaceCulling;
 	uint triSmallCulling;
 
+	uint meshShading;
 	uint toyDraw;
 } _DebugParams;
 #endif

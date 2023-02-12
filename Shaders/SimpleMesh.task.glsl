@@ -26,6 +26,12 @@
 #extension GL_ARB_shader_draw_parameters	: require // gl_DrawIDARB
 
 
+layout (push_constant) uniform PushConstants
+{
+	uint pass;
+} _States;
+
+
 layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {
 	Vertex vertices[];
@@ -50,6 +56,13 @@ layout (std430, binding = DESC_MESHLET_BUFFER) readonly buffer Meshlets
 {
 	Meshlet meshlets[];
 };
+
+layout (std430, binding = DESC_MESHLET_VISIBILITY_BUFFER) buffer MeshletVisibilities
+{
+	uint meshletVisibilities[];
+};
+
+layout (binding = DESC_DEPTH_PYRAMID) uniform sampler2D depthPyramid;
 
 taskPayloadSharedEXT TaskPayload payload;
 
@@ -87,19 +100,26 @@ void main()
 {
 	const uint groupId = gl_WorkGroupID.x;
 	const uint localThreadId = gl_LocalInvocationID.x;
-	const uint localThreadIdStart = groupId * TASK_GROUP_SIZE;
-
+	const uint globalThreadId = gl_GlobalInvocationID.x;
+	
 	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
 	const MeshDraw meshDraw = draws[meshDrawCommand.drawId];
 	
 	const uint meshletOffset = meshDrawCommand.taskOffset;
 	const uint meshletCount = meshDrawCommand.taskCount;
 	const uint meshletMaxIndex = meshletOffset + meshletCount;
-	const uint meshletIndex = localThreadIdStart + localThreadId + meshletOffset;
+	const uint meshletIndex =  meshletOffset + globalThreadId;
 
 	const mat4 worldMatrix = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
 
 	vec3 viewDir = vec3(0, 0, 1);
+
+	const uint drawVisibility = meshDrawCommand.drawVisibility;
+	// For oc
+	const uint meshletVisibilityIndex = globalThreadId + meshDraw.meshletVisibilityOffset;
+	const uint meshletVisibility = meshletVisibilities[meshletVisibilityIndex];
+
+	const uint pass = _States.pass;
 
 	payload.drawId = meshDrawCommand.drawId;
 
@@ -160,9 +180,13 @@ void main()
 	 */
 	barrier(); // memoryBarrierShared();
 
-	bool accept = true;
+	bool valid = meshletIndex < meshletMaxIndex;
 
-	if (meshletIndex < meshletMaxIndex)
+	bool accept = valid && (_DebugParams.meshletOcclusionCulling == 0 || pass > 0 || meshletVisibility > 0);
+
+	bool skip = pass > 0 && drawVisibility > 0 && meshletVisibility > 0 /* && _DebugParams.meshletOcclusionCulling > 0 */;
+
+	// Culling
 	{
 		// TODO: View space cone culling ?
 		// World space cone culling
@@ -175,19 +199,20 @@ void main()
 		boundingSphere.w *= scale.x; // just uniform scale
 
 		if (_DebugParams.meshletConeCulling > 0)
-		{
 			accept = accept && !ConeCull_BoundingSphere(cone, boundingSphere, _View.camPos);
-		}
 
+		boundingSphere.xyz = (_View.viewMatrix * vec4(boundingSphere.xyz, 1.0f)).xyz;
+		
 		// View space frustum culling
 		if (_DebugParams.meshletFrustumCulling > 0)
-		{
-			boundingSphere.xyz = (_View.viewMatrix * vec4(boundingSphere.xyz, 1.0f)).xyz;
 			accept = accept && !FrustumCull(boundingSphere);
-		}
+
+		// View space occlusion culling
+		if (_DebugParams.meshletOcclusionCulling > 0 && pass > 0)
+			accept = accept && !OcclusionCull(depthPyramid, boundingSphere);
 	}
 
-	if (accept)
+	if (accept && !skip)
 	{
 		uint index = atomicAdd(sh_MeshletCount, 1);
 		payload.meshletIndices[index] = meshletIndex;
@@ -203,6 +228,10 @@ void main()
       	uint groupCountZ = 1;
 		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
 	}
+
+	if (pass > 0 && valid)
+		meshletVisibilities[meshletVisibilityIndex] = accept ? 1 : 0;
+
 #endif
 
 #else
@@ -211,7 +240,7 @@ void main()
 
 	if (localThreadId == 0)
 	{
-		uint groupCountX = min(TASK_GROUP_SIZE, meshletCount - localThreadIdStart);
+		uint groupCountX = min(TASK_GROUP_SIZE, meshletCount - groupId * TASK_GROUP_SIZE); // localThreadIdStart
       	uint groupCountY = 1;
       	uint groupCountZ = 1;
 		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);

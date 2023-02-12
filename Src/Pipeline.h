@@ -113,6 +113,60 @@ namespace Niagara
 		DynamicState(const VkPipelineDynamicStateCreateInfo &o) : VkPipelineDynamicStateCreateInfo(o) {  }
 	};
 
+	// Helper class to create specialization constants for a Vulkan pipeline. The state tracks a pipeline globally, and not per shader.
+	struct SpecializationConstantState
+	{
+	public:
+		SpecializationConstantState() = default;
+
+		void Reset() 
+		{
+			if (dirty)
+				constantMap.clear();
+
+			dirty = false;
+		}
+
+		bool IsDirty() const { return dirty; }
+		void ClearDirty() { dirty = false; }
+
+		void SetConstant(uint32_t constantId, uint32_t value)
+		{
+			auto it = constantMap.find(constantId);
+			if (it != constantMap.end() && it->second == value)
+				return;
+
+			constantMap[constantId] = value;
+			dirty = true;
+		}
+
+		void SetConstants(const std::vector<uint32_t>& values) 
+		{
+			for (uint32_t i = 0, imax = static_cast<uint32_t>(values.size()); i < imax; ++i)
+				SetConstant(i, values[i]);
+		}
+
+		void SetConstants(const std::unordered_map<uint32_t, uint32_t> &values)
+		{
+			for (const auto& kvp : values)
+				SetConstant(kvp.first, kvp.second);
+		}
+
+		void ResetConstants(const std::unordered_map<uint32_t, uint32_t>& values)
+		{
+			if (constantMap != values)
+			{
+				constantMap = values;
+				dirty = true;
+			}
+		}
+
+		std::unordered_map<uint32_t, uint32_t> constantMap;
+
+	private:
+		bool dirty{ false };
+	};
+
 
 	/**
 	 * Most graphics pipelines have similar states, therefore the helper "GraphicsPipelineState" holds all the elements and initialize the structures
@@ -172,8 +226,16 @@ namespace Niagara
 		VkDescriptorUpdateTemplate descriptorUpdateTemplate = VK_NULL_HANDLE;
 
 		// Push constants
-		bool bUsePushConstants = false;
+		bool bUsePushConstants{ false };
 		std::vector<VkPushConstantRange> pushConstantRanges;
+
+		// Specialization constants
+		bool bUseSpecializationConstants{ false };
+		std::vector<VkSpecializationMapEntry> specializationMapEntries;
+		std::vector<uint32_t> specializationConsantData;
+		VkSpecializationInfo specializationInfo{};
+
+		SpecializationConstantState constantState;
 
 		// TODO: Delete this
 		DescriptorSetInfo descriptorSetInfos[s_MaxDescrptorSetNum];
@@ -184,6 +246,7 @@ namespace Niagara
 		std::unordered_map<uint8_t, std::vector<ShaderResource>> setResources;
 
 		std::unordered_map<std::string, ShaderResource> pushConstants;
+		std::unordered_map<uint8_t, ShaderResource> specializationConstants;
 
 		void UpdateDescriptorSetInfo(DescriptorSetInfo &setInfo, uint32_t set = 0) const;
 
@@ -202,6 +265,7 @@ namespace Niagara
 		std::vector<VkDescriptorSetLayout> CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported = true) const;
 		VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setIndex = 0, bool pushDescriptorsSupported = true) const;
 		std::vector<VkPushConstantRange> CreatePushConstantRanges() const;
+		VkSpecializationInfo CreateSpecializationInfo();
 		VkPipelineLayout CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported = true) const;
 	};
 

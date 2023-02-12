@@ -45,33 +45,6 @@ layout (binding = 4) buffer DrawVisibilities
 
 layout (binding = 5) uniform sampler2D depthPyramid;
 
-// View space occlusion culling
-bool OcclusionCull(vec4 boundingSphere)
-{
-	bool culled = false;
-
-	vec4 aabb = vec4(0, 0, 1, 1);
-	bool valid = GetAxisAlignedBoundingBox(boundingSphere, -_View.zNearFar.x, _View.projMatrix, aabb);
-    if (valid) 
-    {
-    	float w = (aabb.z - aabb.x) * _View.depthPyramidSize.x;
-    	float h = (aabb.w - aabb.y) * _View.depthPyramidSize.y;
-    	vec2  c = (aabb.xy + aabb.zw) * 0.5;
-
-    	vec2 depthPyramidRatio = _View.depthPyramidSize.xy / max(vec2(1.0), _View.depthPyramidSize.zw);
-    	vec2 uv = c * depthPyramidRatio;
-
-    	float level = floor(log2(max(w, h)));
-
-		// Sampler is set up to do min reduction, so this computes the minimum depth of a 2x2 texel quad
-		float depth = textureLod(depthPyramid, uv, level).x;
-		float sphereDepth = ConvertToDeviceZ(boundingSphere.z + boundingSphere.w);
-		culled = depth > sphereDepth;
-    }
-
-	return culled;
-}
-
 
 layout (local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main()
@@ -99,15 +72,15 @@ void main()
 	vec3 scale = GetScaleFromWorldMatrix(worldMatrix);
 	boundingSphere.w *= scale.x; // just uniform scale
 
-	// Frustum cull
 	bool bVisible = true;
 
+	// Frustum cull
 	if (_DebugParams.drawFrustumCulling > 0)
 		bVisible = bVisible && !FrustumCull(boundingSphere);
 
 	// Only doing oc in late pass
 	if (_DebugParams.drawOcclusionCulling > 0 && pass > 0)
-		bVisible = bVisible && !OcclusionCull(boundingSphere);
+		bVisible = bVisible && !OcclusionCull(depthPyramid, boundingSphere);
 
 #if USE_SUBGROUP
 	uvec4 ballot = subgroupBallot(bVisible);
@@ -125,7 +98,12 @@ void main()
 	drawIndex += subgroupIndex;
 #endif
 
-	if (bVisible && (_States.pass == 0 || drawVisibility == 0))
+	bool meshletOcclusionCulling = _DebugParams.meshShading > 0 && _DebugParams.meshletOcclusionCulling > 0;
+
+	// When meshlet occlusion culling is enabled, we actually *do* need to append the draw command if `drawVisibility`==1
+	// in late pass, so we can correctly render now visible previously invisible meshlets. We also will need to pass
+	// `drawVisibility` along to task shader so that it can *reject* clusters that we *did* draw in the early pass.
+	if (bVisible && (pass == 0 || meshletOcclusionCulling || drawVisibility == 0))
 	{
 #if !USE_SUBGROUP
 		uint drawIndex = atomicAdd(drawCommandCount, 1);
@@ -148,6 +126,10 @@ void main()
 	    drawCommand.firstIndex = meshLod.indexOffset;
 	    drawCommand.vertexOffset = mesh.vertexOffset;
 	    drawCommand.firstInstance = 0;
+
+	    // Mesh shading
+	    drawCommand.drawVisibility = drawVisibility;
+	    drawCommand.meshletVisibilityOffset = meshDraw.meshletVisibilityOffset;
 
 	#if defined(USE_NV_MESH_SHADER)
 	    drawCommand.taskCount = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;

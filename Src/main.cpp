@@ -14,6 +14,7 @@
 #include "Utilities.h"
 #include "Config.h"
 #include "Geometry.h"
+#include "VkQuery.h"
 
 #include <iostream>
 #include <fstream>
@@ -28,7 +29,7 @@
 
 using namespace Niagara;
 
-#define DEBUG_SINGLE_DRAWCALL 1
+#define DEBUG_SINGLE_DRAWCALL 0
 #define TOY_FOR_FUN 1
 const std::string g_ResourcePath = "../Resources/";
 const std::string g_ShaderPath = "./CompiledShaders/";
@@ -38,6 +39,7 @@ VkExtent2D g_ViewportSize{};
 double g_DeltaTime = 0.0;
 bool g_FramebufferResized = false;
 bool g_DrawVisibilityInited = false;
+bool g_MeshletVisibilityInited = false;
 
 enum DebugParam
 {
@@ -51,6 +53,7 @@ enum DebugParam
 	TriBackfaceCulling,
 	TriSmallCulling,
 
+	MeshShading,
 	ToyDraw,
 
 	ParamCount
@@ -60,10 +63,24 @@ struct DebugParams
 {
 	uint32_t params[ParamCount] = {};
 
+	std::string paramNames[ParamCount] = 
+	{
+		std::string("DrawFrustumCulling"),
+		std::string("DrawOcclusionCulling"),
+		std::string("MeshletConeCulling"),
+		std::string("MeshletFrusutmCulling"),
+		std::string("MeshletOcclusionCulling"),
+		std::string("TriBackfaceCulling"),
+		std::string("TriSmallCulling"),
+
+		std::string("MeshShading"),
+		std::string("ToyDraw"),
+	};
+
 	// Default params
 	void Init()
 	{
-		params[DrawFrustumCulling] = 0;
+		params[DrawFrustumCulling] = 1;
 		params[DrawOcclusionCulling] = 1;
 		params[MeshletConeCulling] = 1;
 		params[MeshletFrustumCulling] = 1;
@@ -71,13 +88,29 @@ struct DebugParams
 		params[TriBackfaceCulling] = 1;
 		params[TriSmallCulling] = 1;
 
+		params[MeshShading] = 1;
 		params[ToyDraw] = 0;
 	}
 
 	void SwitchParam(DebugParam param)
 	{
 		params[param] ^= 1;
-		printf("Param: %d - %d\n", param, params[param]);
+		printf("Param: %s - %d\n", paramNames[param].c_str(), params[param]);
+	}
+
+	void SwitchCulling()
+	{
+		uint32_t c = params[DrawFrustumCulling] ^ 1;
+
+		params[DrawFrustumCulling] = c;
+		params[DrawOcclusionCulling] = c;
+		params[MeshletConeCulling] = c;
+		params[MeshletFrustumCulling] = c;
+		params[MeshletOcclusionCulling] = c;
+		params[TriBackfaceCulling] = c;
+		params[TriSmallCulling] = c;
+
+		printf("Culling %s", c > 0 ? "ON" : "OFF");
 	}
 };
 DebugParams g_DebugParams{};
@@ -154,6 +187,12 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 		break;
 	case GLFW_KEY_6:
 		g_DebugParams.SwitchParam(DebugParam::TriSmallCulling);
+		break;
+	case GLFW_KEY_9:
+		g_DebugParams.SwitchCulling();
+		break;
+	case GLFW_KEY_M:
+		g_DebugParams.SwitchParam(DebugParam::MeshShading);
 		break;
 	case GLFW_KEY_T:
 		g_DebugParams.SwitchParam(DebugParam::ToyDraw);
@@ -319,15 +358,18 @@ std::vector<VkDynamicState> g_DynamicStates =
 enum DescriptorBindings : uint32_t
 {
 	VertexBuffer		= 0,
-	MeshBuffer			= 1,
+	MeshBuffer			= 1, // Actually not used in the task/mesh shader
 	MeshDrawBuffer		= 2,
 	MeshDrawArgsBuffer	= 3,
 	MeshletBuffer		= 4,
 	MeshletDataBuffer	= 5,
 
+	MeshletVisibilityBuffer	= 1,
+	DepthPyramid		= 6,
+
 	// TODO: put these another place
 	// Globals 
-	ViewUniformBuffer	= 6,
+	ViewUniformBuffer	= 7,
 	DebugUniformBuffer,
 };
 
@@ -342,12 +384,18 @@ struct alignas(16) MeshDraw
 	
 	int32_t  vertexOffset; // == meshes[meshIndex].vertexOffset, helps data locality in mesh shader
 	uint32_t meshIndex;
+	uint32_t meshletVisibilityOffset;
 };
 
 struct MeshDrawCommand
 {
 	uint32_t drawId;
 	VkDrawIndexedIndirectCommand drawIndexedIndirectCommand; // 5 uint32_t
+
+	// Used by mesh shading path
+	uint32_t drawVisibility;
+	uint32_t meshletVisibilityOffset;
+
 	// Switch from MeshShaderNV to MeshShaderEXT
 #if 0
 	VkDrawMeshTasksIndirectCommandNV drawMeshTaskIndirectCommand; // 2 uint32_t
@@ -489,6 +537,7 @@ struct BufferManager
 #if USE_MESHLETS
 	GpuBuffer meshletBuffer;
 	GpuBuffer meshletDataBuffer;
+	GpuBuffer meshletVisibilityBuffer;
 #endif
 
 	// View dependent textures
@@ -545,6 +594,7 @@ struct BufferManager
 #if USE_MESHLETS
 		meshletBuffer.Destroy(device);
 		meshletDataBuffer.Destroy(device);
+		meshletVisibilityBuffer.Destroy(device);
 #endif
 
 		// View dependent textures
@@ -763,6 +813,13 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 {
 	g_CommandContext.BeginCommandBuffer(cmd);
 
+	// Profiling
+	auto& timestampQueryPool = g_CommonQueryPools.queryPools[0];
+	timestampQueryPool.Reset(cmd);
+	timestampQueryPool.WriteTimestamp(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+
+	auto& pipelineQueryPool = g_CommonQueryPools.queryPools[1];
+
 	// Globals
 	auto viewUniformBufferInfo = Niagara::DescriptorInfo(g_BufferMgr.viewUniformBuffer.buffer);
 	auto debugUniformBufferInfo = DescriptorInfo(g_BufferMgr.debugUniformBuffer.buffer, VkDeviceSize(g_BufferMgr.debugUniformBuffer.offset), VkDeviceSize(g_BufferMgr.debugUniformBuffer.size));
@@ -791,6 +848,24 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 		g_DrawVisibilityInited = true;
 	}
+	
+#if USE_MESHLETS
+	if (!g_MeshletVisibilityInited)
+	{
+		const auto& meshletVisibilityBuffer = g_BufferMgr.meshletVisibilityBuffer;
+		auto meshletVisibilityOffset = VkDeviceSize(meshletVisibilityBuffer.offset);
+		auto meshletVisibilitySize = VkDeviceSize(meshletVisibilityBuffer.size);
+
+		vkCmdFillBuffer(cmd, meshletVisibilityBuffer.buffer, meshletVisibilityOffset, meshletVisibilitySize, 0);
+
+		g_CommandContext.BufferBarrier2(meshletVisibilityBuffer.buffer, meshletVisibilityOffset, meshletVisibilitySize,
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+		g_CommandContext.PipelineBarriers2(cmd);
+
+		g_MeshletVisibilityInited = true;
+	}
+#endif
 
 	// Init indirect draw count
 	{
@@ -881,8 +956,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		struct States
 		{
 			uint32_t pass;
-		};
-		States states = { pass };
+		} states = { pass };
 		g_CommandContext.PushConstants(cmd, "_States", 0, sizeof(states), &states);
 
 		groupsX = Niagara::DivideAndRoundUp(drawArgsBuffer.elementCount, GroupSize);
@@ -913,8 +987,10 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	auto viewportRect = VkRect2D{ VkOffset2D{0, 0}, swapchain.extent };
 	VkViewport dynamicViewport = Niagara::GetViewport(viewportRect, 0, 1, FLIP_VIEWPORT);
 
-	auto draw = [&](uint32_t pass, VkClearColorValue clearColor, VkClearDepthStencilValue clearDepth)
+	auto draw = [&](uint32_t pass, VkClearColorValue clearColor, VkClearDepthStencilValue clearDepth, uint32_t query)
 	{
+		pipelineQueryPool.BeginQuery(cmd, query);
+
 		if (pass == 0)
 		{
 			g_CommandContext.ImageBarrier2(colorBuffer.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -965,16 +1041,25 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.SetDescriptor(DescriptorBindings::VertexBuffer, vbInfo);
 
 #if USE_MESHLETS
-		const auto& mb = g_BufferMgr.meshletBuffer;
+		const auto& meshletBuffer = g_BufferMgr.meshletBuffer;
 		const auto& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
+		const auto& meshletVisibilityBuffer = g_BufferMgr.meshletVisibilityBuffer;
 
-		g_CommandContext.SetDescriptor(DescriptorBindings::MeshBuffer, meshBufferDescInfo);
+		// Not used now
+		// g_CommandContext.SetDescriptor(DescriptorBindings::MeshBuffer, meshBufferDescInfo);
 
-		auto mbInfo = Niagara::DescriptorInfo(mb.buffer, VkDeviceSize(0), VkDeviceSize(mb.size));
-		g_CommandContext.SetDescriptor(DescriptorBindings::MeshletBuffer, mbInfo);
+		auto meshletInfo = Niagara::DescriptorInfo(meshletBuffer.buffer, VkDeviceSize(meshletBuffer.offset), VkDeviceSize(meshletBuffer.size));
+		g_CommandContext.SetDescriptor(DescriptorBindings::MeshletBuffer, meshletInfo);
 
-		auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(0), VkDeviceSize(meshletDataBuffer.size));
+		auto meshletDataInfo = Niagara::DescriptorInfo(meshletDataBuffer.buffer, VkDeviceSize(meshletDataBuffer.offset), VkDeviceSize(meshletDataBuffer.size));
 		g_CommandContext.SetDescriptor(DescriptorBindings::MeshletDataBuffer, meshletDataInfo);
+
+		auto meshletVisibilityInfo = DescriptorInfo(meshletVisibilityBuffer.buffer, VkDeviceSize(meshletVisibilityBuffer.offset), VkDeviceSize(meshletVisibilityBuffer.size));
+		g_CommandContext.SetDescriptor(DescriptorBindings::MeshletVisibilityBuffer, meshletVisibilityInfo);
+
+		const auto& depthPyramid = g_BufferMgr.depthPyramid;
+		DescriptorInfo depthPyramidInfo(g_CommonStates.minClampSampler, depthPyramid.views[0], VK_IMAGE_LAYOUT_GENERAL);
+		g_CommandContext.SetDescriptor(DescriptorBindings::DepthPyramid, depthPyramidInfo);
 #endif
 
 		// Indirect draws
@@ -986,6 +1071,12 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 #endif
 
 		g_CommandContext.PushDescriptorSetWithTemplate(cmd, 0); // or g_CommandContext.PushDescriptorSet(cmd, 0);
+
+		struct
+		{
+			uint32_t pass;
+		} states = { pass };
+		g_CommandContext.PushConstants(cmd, "_States", 0, sizeof(states), &states);
 
 		VkDeviceSize offset = 0;
 		vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
@@ -1018,6 +1109,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 #endif // USE_MESHLETS
 
 		g_CommandContext.EndRendering(cmd);
+
+		pipelineQueryPool.EndQuery(cmd, query);
 	};
 
 	// Generate depth pyramid
@@ -1097,16 +1190,21 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		}
 	};
 
+	pipelineQueryPool.Reset(cmd);
+
 	// Early cull : frustum cull & fill objects that were visible last frame
-	cull(0);
+	cull(/* pass =  */ 0);
 	// Early draw : render objects that were visible last frame
-	draw(0, clearColor, clearDepth);
+	draw(/* pass =  */ 0, clearColor, clearDepth, /* query = */ 0);
 
 	buildDepthPyramid();
 	// Late cull : frustum cull & fill objects that were not visible last frame
-	cull(1);
+	cull(/* pass =  */ 1);
 	// Late draw : render objects that are visible this frame but weren't drawn in the early pass
-	draw(1, clearColor, clearDepth);
+	draw(/* pass =  */ 1, clearColor, clearDepth, /* query = */ 1);
+
+	// TODO: Update the final depth pyramid
+	// ...
 
 	// Toy draw pass
 	auto toyDraw = [&](VkCommandBuffer cmd, Image &colorBuffer, VkImageLayout oldLayout, VkPipelineStageFlags2 srcStageMask, VkAccessFlagBits2 srcAccessMask)
@@ -1150,6 +1248,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 		g_CommandContext.EndRendering(cmd);
 	};
+
 	if (g_DebugParams.params[DebugParam::ToyDraw])
 		toyDraw(cmd, colorBuffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
@@ -1178,6 +1277,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 		g_CommandContext.PipelineBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT); // VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
 	}
+
+	timestampQueryPool.WriteTimestamp(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 1);
 
 	g_CommandContext.EndCommandBuffer(cmd);
 }
@@ -1260,20 +1361,6 @@ void GetFrameResources(const Niagara::Device &device, std::vector<FrameResources
 	}
 }
 
-VkQueryPool GetQueryPool(VkDevice device, uint32_t queryCount)
-{
-	VkQueryPoolCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-	createInfo.queryCount = queryCount;
-	createInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
-	// createInfo.pipelineStatistics = VkQueryPipelineStatisticFlagBits::
-
-	VkQueryPool queryPool;
-	VK_CHECK(vkCreateQueryPool(device, &createInfo, nullptr, &queryPool));
-
-	return queryPool;
-}
-
 
 /// Main
 
@@ -1352,6 +1439,7 @@ int main()
 	physicalDeviceFeatures.samplerAnisotropy = VK_TRUE;
 	physicalDeviceFeatures.shaderInt16 = VK_TRUE;
 	physicalDeviceFeatures.fillModeNonSolid = VK_TRUE;
+	physicalDeviceFeatures.pipelineStatisticsQuery = VK_TRUE;
 
 	// Device extensions
 	void* pNextChain = nullptr;
@@ -1427,6 +1515,9 @@ int main()
 	// Common states
 	g_CommonStates.Init(device);
 
+	// Queries
+	g_CommonQueryPools.Init(device);
+
 	// Shaders
 	g_ShaderMgr.Init(device);
 
@@ -1501,9 +1592,6 @@ int main()
 	std::vector<FrameResources> frameResources;
 	GetFrameResources(device, frameResources);
 
-	VkQueryPool queryPool = GetQueryPool(device, 128);
-	assert(queryPool);
-
 	// Scenes
 	
 	// Camera
@@ -1571,6 +1659,13 @@ int main()
 	// Preparing indirect draw commands
 #if DEBUG_SINGLE_DRAWCALL
 	const uint32_t DrawCount = 5; //  DRAW_COUNT;
+
+	float testZ = 8.0f, farZ = -10.0f;
+	std::vector<glm::vec3> positions
+	{
+		glm::vec3(0.0f, 0.0f, testZ + 0.5), glm::vec3(3.0f, 0.0f, testZ), glm::vec3(-1.8f, 2.0f, testZ),
+		glm::vec3(0.0f, 0.0f, farZ), glm::vec3(1.0f, 0.0f, farZ)// occlusion culling test
+	};
 #else
 	const uint32_t DrawCount = DRAW_COUNT;
 #endif
@@ -1578,14 +1673,8 @@ int main()
 
 	g_ViewUniformBufferParameters.drawCount = DrawCount;
 
-	float testZ = 8.0f, farZ = -10.0f;
-	std::vector<glm::vec3> positions
-	{ 
-		glm::vec3(0.0f, 0.0f, testZ+0.5), glm::vec3(3.0f, 0.0f, testZ), glm::vec3(-1.8f, 2.0f, testZ),  
-		glm::vec3(0.0f, 0.0f, farZ), glm::vec3(1.0f, 0.0f, farZ)// occlusion culling test
-	};
-
 	std::vector<MeshDraw> meshDraws(DrawCount);
+	uint32_t meshletVisibilityCount = 0;
 	for (uint32_t i = 0; i < DrawCount; ++i)
 	{
 		auto& draw = meshDraws[i];
@@ -1615,7 +1704,12 @@ int main()
 
 		draw.meshIndex = meshId;
 		draw.vertexOffset = mesh.vertexOffset;
+		draw.meshletVisibilityOffset = meshletVisibilityCount;
+
+		meshletVisibilityCount += mesh.lods[0].meshletCount;
 	}
+
+	printf("Total meshlet visibility count: %d\n", meshletVisibilityCount);
 
 	// Indirect draw command buffer
 	GpuBuffer& drawBuffer = g_BufferMgr.drawDataBuffer;
@@ -1627,10 +1721,10 @@ int main()
 
 	const uint32_t maxPassCount = 2;
 	GpuBuffer& drawCountBuffer = g_BufferMgr.drawCountBuffer;
-	drawCountBuffer.Init(device, 4, maxPassCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
+	drawCountBuffer.Init(device, sizeof(uint32_t), maxPassCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 
 	GpuBuffer& drawVisibilityBuffer = g_BufferMgr.drawVisibilityBuffer;
-	drawVisibilityBuffer.Init(device, 4, DrawCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
+	drawVisibilityBuffer.Init(device, sizeof(uint32_t), DrawCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 #endif
 
 #if USE_MESHLETS
@@ -1638,11 +1732,23 @@ int main()
 	meshletBuffer.Init(device, sizeof(Meshlet), static_cast<uint32_t>(geometry.meshlets.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshlets.data());
 
 	GpuBuffer& meshletDataBuffer = g_BufferMgr.meshletDataBuffer;
-	meshletDataBuffer.Init(device, 4, static_cast<uint32_t>(geometry.meshletData.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshletData.data());
+	meshletDataBuffer.Init(device, sizeof(uint32_t), static_cast<uint32_t>(geometry.meshletData.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshletData.data());
+
+	GpuBuffer& meshletVisibilityBuffer = g_BufferMgr.meshletVisibilityBuffer;
+	meshletVisibilityBuffer.Init(device, sizeof(uint32_t), meshletVisibilityCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 #endif
 
+	// Frame time
 	uint32_t currentFrame = 0;
 	double currentFrameTime = glfwGetTime() * 1000.0;
+	double avgCpuFrame = 0.0;
+
+	const double timestampPeriod = device.properties.limits.timestampPeriod * 1e-6;
+	double avgGpuFrame = 0.0;
+
+	// Pipeline statistics
+	uint32_t pipelineQueryResults[2] = {};
+	uint32_t triangleCount = 0;
 
 	// Resize
 	auto windowResize = [&](SyncObjects &currentSyncObjects) 
@@ -1724,6 +1830,7 @@ int main()
 		g_ViewUniformBufferParameters.frustumPlanes[5] = glm::vec4(0, 0, -1, -MAX_DRAW_DISTANCE);
 		viewUniformBuffer.Update(device, &g_ViewUniformBufferParameters, sizeof(g_ViewUniformBufferParameters), 1);
 
+		g_DebugParams.params[DebugParam::MeshShading] = USE_MESHLETS;
 		debugUniformBuffer.Update(device, &g_DebugParams, sizeof(g_DebugParams), 1);
 
 		// Get frame resources
@@ -1777,14 +1884,38 @@ int main()
 
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 
-		double frameEndTime = glfwGetTime() * 1000.0;
-		double deltaTime = frameEndTime - currentFrameTime;
-		currentFrameTime = frameEndTime;
+		// Cpu times
+		{
+			double frameEndTime = glfwGetTime() * 1000.0;
+			g_DeltaTime = frameEndTime - currentFrameTime;
+			currentFrameTime = frameEndTime;
 
-		g_DeltaTime = deltaTime;
+			avgCpuFrame = avgCpuFrame * 0.95 + g_DeltaTime * 0.05;
+		}
+
+		// Gpu times
+		{
+			uint64_t timestampResults[2] = {};
+			VK_CHECK(g_CommonQueryPools.queryPools[0].GetResults(device, 0, ARRAYSIZE(timestampResults), sizeof(timestampResults), timestampResults, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT));
+
+			double frameGpuBegin = double(timestampResults[0]) * timestampPeriod;
+			double frameGpuEnd = double(timestampResults[1]) * timestampPeriod;
+			double deltaGpuTime = frameGpuEnd - frameGpuBegin;
+
+			avgGpuFrame = avgGpuFrame * 0.95 + deltaGpuTime * 0.05;
+		}
+
+		// Pipeline queries
+		// TODO: It does not return valid values ???
+		double trianglesPerSec = 0;
+		{
+			g_CommonQueryPools.queryPools[1].GetResults(device, 0, 1, sizeof(pipelineQueryResults), pipelineQueryResults, sizeof(uint32_t), VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+
+			triangleCount = pipelineQueryResults[0] + pipelineQueryResults[1];
+		}
 
 		char title[256];
-		sprintf_s(title, "Cpu %.1f ms, Gpu %.1f ms", deltaTime, 0.f);
+		sprintf_s(title, "Cpu %.2f ms, Gpu %.2f ms, Tris %.2fM", avgCpuFrame, avgGpuFrame, double(triangleCount) * 1e-1);
 		glfwSetWindowTitle(window, title);
 	}
 
@@ -1799,8 +1930,6 @@ int main()
 	// Clean up Vulkan
 
 	// Resources
-
-	vkDestroyQueryPool(device, queryPool, nullptr);
 
 	for (auto &frameResource : frameResources)
 		frameResource.Cleanup(device);
@@ -1817,6 +1946,8 @@ int main()
 	g_PipelineMgr.Cleanup(device);
 
 	g_ShaderMgr.Cleanup(device);
+
+	g_CommonQueryPools.Destroy(device);
 
 	g_CommonStates.Destroy(device);
 

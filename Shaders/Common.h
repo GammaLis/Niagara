@@ -1,9 +1,9 @@
 #ifndef COMMON_INCLUDED
 #define COMMON_INCLUDED
 
-#define DESC_VIEW_UNIFORMS 6
+#define DESC_VIEW_UNIFORMS 7
 
-layout (set = 0, binding = 6) uniform ViewUniformBufferParameters
+layout (set = 0, binding = DESC_VIEW_UNIFORMS) uniform ViewUniformBufferParameters
 {
     mat4 viewProjMatrix;
     mat4 viewMatrix;
@@ -207,6 +207,33 @@ bool InsideBounds(vec2 p, vec4 bounds)
 {
     return (p.x >= bounds.x && p.x < bounds.z) && 
            (p.y >= bounds.y && p.y < bounds.w);
+}
+
+// View space occlusion culling
+bool OcclusionCull(sampler2D depthPyramid, vec4 boundingSphere)
+{
+    bool culled = false;
+
+    vec4 aabb = vec4(0, 0, 1, 1);
+    bool valid = GetAxisAlignedBoundingBox(boundingSphere, -_View.zNearFar.x, _View.projMatrix, aabb);
+    if (valid) 
+    {
+        float w = (aabb.z - aabb.x) * _View.depthPyramidSize.x;
+        float h = (aabb.w - aabb.y) * _View.depthPyramidSize.y;
+        vec2  c = (aabb.xy + aabb.zw) * 0.5;
+
+        vec2 depthPyramidRatio = _View.depthPyramidSize.xy / max(vec2(1.0), _View.depthPyramidSize.zw);
+        vec2 uv = c * depthPyramidRatio;
+
+        float level = floor(log2(max(w, h)));
+
+        // Sampler is set up to do min reduction, so this computes the minimum depth of a 2x2 texel quad
+        float depth = textureLod(depthPyramid, uv, level).x;
+        float sphereDepth = ConvertToDeviceZ(boundingSphere.z + boundingSphere.w);
+        culled = depth > sphereDepth;
+    }
+
+    return culled;
 }
 
 #endif // COMMON_INCLUDED
