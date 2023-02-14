@@ -1,9 +1,6 @@
 #version 450 core
 
 /// Settings
-#ifndef TASK_GROUP_SIZE
-#define TASK_GROUP_SIZE 32
-#endif
 
 // TODO: Not used now
 #define USE_SUBGROUP 0
@@ -25,6 +22,12 @@
 
 #extension GL_ARB_shader_draw_parameters	: require // gl_DrawIDARB
 
+#ifndef TASK_GROUP_SIZE
+#define TASK_GROUP_SIZE 32
+#endif
+
+
+layout (constant_id = 0) const uint TASK = 0;
 
 layout (push_constant) uniform PushConstants
 {
@@ -50,6 +53,11 @@ layout (std430, binding = DESC_DRAW_DATA_BUFFER) readonly buffer Draws
 layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) readonly buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
+};
+
+layout (std430, binding = DESC_DRAW_COMMAND_BUFFER) readonly buffer TaskCommands
+{
+	MeshTaskCommand taskCommands[];
 };
 
 layout (std430, binding = DESC_MESHLET_BUFFER) readonly buffer Meshlets
@@ -101,27 +109,62 @@ void main()
 	const uint groupId = gl_WorkGroupID.x;
 	const uint localThreadId = gl_LocalInvocationID.x;
 	const uint globalThreadId = gl_GlobalInvocationID.x;
-	
-	const MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
-	const MeshDraw meshDraw = draws[meshDrawCommand.drawId];
-	
-	const uint meshletOffset = meshDrawCommand.taskOffset;
-	const uint meshletCount = meshDrawCommand.taskCount;
-	const uint meshletMaxIndex = meshletOffset + meshletCount;
-	const uint meshletIndex =  meshletOffset + globalThreadId;
+
+	uint drawId = 0;
+
+	uint meshletOffset = 0;
+	uint meshletCount = 0;
+	uint meshletMaxIndex = 0;
+	uint meshletIndex = 0;
+
+	uint drawVisibility = 0;
+	// For oc
+	uint meshletVisibilityIndex = 0;
+
+	MeshDraw meshDraw;
+
+	if (TASK > 0)
+	{
+		MeshTaskCommand meshTaskCommand = taskCommands[groupId];
+		drawId = meshTaskCommand.drawId;
+		meshDraw = draws[drawId];
+		
+		meshletOffset = meshTaskCommand.taskOffset;
+		meshletCount = meshTaskCommand.taskCount;
+		meshletMaxIndex = meshletOffset + meshletCount;
+		meshletIndex =  meshletOffset + localThreadId;
+
+		drawVisibility = meshTaskCommand.meshletVisibilityData & 1;
+		// For oc
+		meshletVisibilityIndex = localThreadId + (meshTaskCommand.meshletVisibilityData >> 1);
+	}
+	else
+	{
+		MeshDrawCommand meshDrawCommand = drawCommands[gl_DrawIDARB];
+		drawId = meshDrawCommand.drawId;
+		meshDraw = draws[drawId];
+		
+		meshletOffset = meshDrawCommand.taskOffset;
+		meshletCount = meshDrawCommand.taskCount;
+		meshletMaxIndex = meshletOffset + meshletCount;
+		meshletIndex =  meshletOffset + globalThreadId;
+
+		drawVisibility = meshDrawCommand.drawVisibility;
+		// For oc
+		meshletVisibilityIndex = globalThreadId + meshDraw.meshletVisibilityOffset;
+	}
 
 	const mat4 worldMatrix = BuildWorldMatrix(meshDraw.worldMatRow0, meshDraw.worldMatRow1, meshDraw.worldMatRow2);
-
-	vec3 viewDir = vec3(0, 0, 1);
-
-	const uint drawVisibility = meshDrawCommand.drawVisibility;
-	// For oc
-	const uint meshletVisibilityIndex = globalThreadId + meshDraw.meshletVisibilityOffset;
+	
+#if 0
 	const uint meshletVisibility = meshletVisibilities[meshletVisibilityIndex];
+#else
+	const uint meshletVisibility = (meshletVisibilities[meshletVisibilityIndex >> 5]) & (1u << (meshletVisibilityIndex & 31));
+#endif
 
 	const uint pass = _States.pass;
 
-	payload.drawId = meshDrawCommand.drawId;
+	payload.drawId = drawId;
 
 #if CULL
 
@@ -191,7 +234,7 @@ void main()
 		// TODO: View space cone culling ?
 		// World space cone culling
 		vec4 cone = meshlets[meshletIndex].cone;
-		cone = vec4(mat3(worldMatrix) * cone.xyz, cone.w);
+		cone = vec4(normalize(mat3(worldMatrix) * cone.xyz), cone.w);
 
 		vec4 boundingSphere = meshlets[meshletIndex].boundingSphere;
 		boundingSphere.xyz = (worldMatrix * vec4(boundingSphere.xyz, 1.0)).xyz;
@@ -230,7 +273,17 @@ void main()
 	}
 
 	if (pass > 0 && valid)
+	{
+	#if 0
 		meshletVisibilities[meshletVisibilityIndex] = accept ? 1 : 0;
+	#else
+		uint meshletVisibilityUInt = 1u << (meshletVisibilityIndex & 31);
+		if (accept)
+			atomicOr (meshletVisibilities[(meshletVisibilityIndex >> 5)],  meshletVisibilityUInt);
+		else
+			atomicAnd(meshletVisibilities[(meshletVisibilityIndex >> 5)], ~meshletVisibilityUInt);
+	#endif
+	}
 
 #endif
 

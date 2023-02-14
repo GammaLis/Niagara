@@ -12,13 +12,13 @@ namespace Niagara
 
 		this->type = type;
 		this->count = count;
-		this->pipelineStaticsFlags = pipelineStaticsFlags;
+		this->pipelineStatisticFlags = pipelineStatisticFlags;
 
 		VkQueryPoolCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
 		createInfo.queryType = type;
 		createInfo.queryCount = count;
-		createInfo.pipelineStatistics = pipelineStaticsFlags;
+		createInfo.pipelineStatistics = pipelineStatisticFlags;
 
 		queryPool = VK_NULL_HANDLE;
 		VK_CHECK(vkCreateQueryPool(device, &createInfo, nullptr, &queryPool));

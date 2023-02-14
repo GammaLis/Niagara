@@ -12,6 +12,8 @@
 #endif
 
 
+layout (constant_id = 0) const uint TASK = 0;
+
 layout (push_constant) uniform PushConstants
 {
 	uint pass;
@@ -31,6 +33,11 @@ layout (binding = 1) readonly buffer Draws
 layout (binding = 2) writeonly buffer DrawCommands
 {
 	MeshDrawCommand drawCommands[];
+};
+
+layout (binding = 2) writeonly buffer TaskCommands
+{
+	MeshTaskCommand taskCommands[];
 };
 
 layout (binding = 3) buffer DrawCommandCount
@@ -105,10 +112,6 @@ void main()
 	// `drawVisibility` along to task shader so that it can *reject* clusters that we *did* draw in the early pass.
 	if (bVisible && (pass == 0 || meshletOcclusionCulling || drawVisibility == 0))
 	{
-#if !USE_SUBGROUP
-		uint drawIndex = atomicAdd(drawCommandCount, 1);
-#endif
-
 		// Choose one lod
 		float lodDistance = log2(max(1, length(boundingSphere.xyz) - boundingSphere.w));
 		uint lodIndex = clamp(int(lodDistance), 0, int(mesh.lodCount) - 1);
@@ -116,34 +119,62 @@ void main()
 		MeshLod meshLod = mesh.lods[lodIndex];
 		// DEBUG::
 		// meshLod = mesh.lods[max(0, int(mesh.lodCount) - 1)];
-		
-		MeshDrawCommand drawCommand;
 
-		drawCommand.drawId = globalThreadId;
+		if (TASK > 0)
+		{
+			uint taskGroups = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
+			uint taskIndex = atomicAdd(drawCommandCount, taskGroups);
 
-		drawCommand.indexCount = meshLod.indexCount;
-	    drawCommand.instanceCount = 1;
-	    drawCommand.firstIndex = meshLod.indexOffset;
-	    drawCommand.vertexOffset = mesh.vertexOffset;
-	    drawCommand.firstInstance = 0;
+			uint meshletVisibilityData = (meshDraw.meshletVisibilityOffset << 1) | drawVisibility;
 
-	    // Mesh shading
-	    drawCommand.drawVisibility = drawVisibility;
-	    drawCommand.meshletVisibilityOffset = meshDraw.meshletVisibilityOffset;
+			for (uint i = 0; i < taskGroups; ++i)
+			{
+				uint groupStart = i * TASK_GROUP_SIZE;
 
-	#if defined(USE_NV_MESH_SHADER)
-	    drawCommand.taskCount = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
-	    drawCommand.firstTask = meshLod.meshletOffset / TASK_GROUP_SIZE;
+				MeshTaskCommand taskCommand;
 
-	#elif defined(USE_EXT_MESH_SHADER)
-		drawCommand.taskOffset  = meshLod.meshletOffset;
-		drawCommand.taskCount 	= meshLod.meshletCount;
-		drawCommand.groupCountX = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
-		drawCommand.groupCountY = 1;
-		drawCommand.groupCountZ = 1;
+				taskCommand.drawId = globalThreadId;
+				taskCommand.taskOffset = meshLod.meshletOffset + groupStart;
+				taskCommand.taskCount  = min(meshLod.meshletCount - groupStart, TASK_GROUP_SIZE);
+				taskCommand.meshletVisibilityData = meshletVisibilityData + (groupStart << 1); // meshVisibilityOffset in higher bits 
+
+				taskCommands[taskIndex + i] = taskCommand;	
+			}			
+		}
+		else
+		{
+	#if !USE_SUBGROUP
+			uint drawIndex = atomicAdd(drawCommandCount, 1);
 	#endif
 
-	    drawCommands[drawIndex] = drawCommand;
+			MeshDrawCommand drawCommand;
+
+			drawCommand.drawId = globalThreadId;
+
+			drawCommand.indexCount = meshLod.indexCount;
+		    drawCommand.instanceCount = 1;
+		    drawCommand.firstIndex = meshLod.indexOffset;
+		    drawCommand.vertexOffset = mesh.vertexOffset;
+		    drawCommand.firstInstance = 0;
+
+		    // Mesh shading
+		    drawCommand.drawVisibility = drawVisibility;
+		    drawCommand.meshletVisibilityOffset = meshDraw.meshletVisibilityOffset;
+
+		#if defined(USE_NV_MESH_SHADER)
+		    drawCommand.taskCount = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
+		    drawCommand.firstTask = meshLod.meshletOffset / TASK_GROUP_SIZE;
+
+		#elif defined(USE_EXT_MESH_SHADER)
+			drawCommand.taskOffset  = meshLod.meshletOffset;
+			drawCommand.taskCount 	= meshLod.meshletCount;
+			drawCommand.groupCountX = (meshLod.meshletCount + TASK_GROUP_SIZE-1) / TASK_GROUP_SIZE;
+			drawCommand.groupCountY = 1;
+			drawCommand.groupCountZ = 1;
+		#endif
+
+		    drawCommands[drawIndex] = drawCommand;
+		}
 	}
 
 	// Update draw visibilities in late pass

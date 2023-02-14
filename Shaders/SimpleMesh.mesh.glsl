@@ -4,9 +4,6 @@
 #version 450 core
 
 // Settings
-#ifndef MESH_GROUP_SIZE
-#define MESH_GROUP_SIZE 32
-#endif
 
 #define USE_EXT_MESH_SHADER 1
 #define USE_PER_PRIMITIVE 0
@@ -30,6 +27,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types  : require
 #endif
 #endif
+
+#ifndef MESH_GROUP_SIZE
+#define MESH_GROUP_SIZE 32
+#endif
+
 
 layout (std430, binding = DESC_VERTEX_BUFFER) readonly buffer Vertices
 {

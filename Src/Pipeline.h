@@ -256,6 +256,8 @@ namespace Niagara
 		virtual std::vector<const Shader*> GetPipelineShaders() const = 0;
 		virtual bool ShadersValid() const = 0;
 
+		void SetSpecializationConstant(uint32_t constantId, uint32_t value);
+
 		void GatherDescriptors();
 		void SpirvCrossGatherDescriptors();
 		std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo() const;

@@ -21,8 +21,8 @@
 #define MAX_PRIMITIVES 84
 #define MAX_LODS 8
 
-#define TASK_GROUP_SIZE 32
-#define MESH_GROUP_SIZE 32
+#define TASK_GROUP_SIZE 64
+#define MESH_GROUP_SIZE 64
 
 #define DESC_VERTEX_BUFFER 0
 // Not used in task/mesh shaders now
@@ -115,6 +115,14 @@ struct MeshDrawCommand
 	uint groupCountY;
 	uint groupCountZ;
 #endif
+};
+
+struct MeshTaskCommand
+{
+	uint drawId;
+	uint taskOffset;
+    uint taskCount;
+    uint meshletVisibilityData; // low bit: draw visibility, higher 31 bit: meshVisibilityOffset
 };
 
 struct TaskPayload

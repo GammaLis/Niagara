@@ -30,8 +30,14 @@ namespace Niagara
 
 	constexpr uint32_t MESH_MAX_LODS = 8;
 
-	constexpr uint32_t TASK_GROUP_SIZE = 32;
-	constexpr uint32_t DRAW_COUNT = 1000;
+	constexpr uint32_t TASK_GROUP_SIZE = 64;
+#if 1
+	constexpr uint32_t DRAW_COUNT = 100'000;
+	constexpr float SCENE_RADIUS = 160.0f;
+	constexpr float MAX_DRAW_DISTANCE = 120.0f;
+#else
+	constexpr uint32_t DRAW_COUNT = 1'000;
 	constexpr float SCENE_RADIUS = 20.0f;
 	constexpr float MAX_DRAW_DISTANCE = 20.0f;
+#endif
 }

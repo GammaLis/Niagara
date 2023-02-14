@@ -288,6 +288,11 @@ namespace Niagara
 		return ranges;
 	}
 
+	void Pipeline::SetSpecializationConstant(uint32_t constantId, uint32_t value)
+	{
+		constantState.SetConstant(constantId, value);
+	}
+
 	VkPipelineLayout Pipeline::CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported) const
 	{
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
@@ -320,7 +325,8 @@ namespace Niagara
 
 			if (it != specializationConstants.end())
 			{
-				auto& constantResource = it->second;
+				const auto& constantResource = it->second;
+
 				entry.constantID = constantResource.constantId;
 				entry.offset = constantResource.offset;
 				entry.size = constantResource.size;

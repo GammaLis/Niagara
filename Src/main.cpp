@@ -37,6 +37,7 @@ const std::string g_ShaderPath = "./CompiledShaders/";
 GLFWwindow* g_Window = nullptr;
 VkExtent2D g_ViewportSize{};
 double g_DeltaTime = 0.0;
+bool g_UseTaskSubmit = false;
 bool g_FramebufferResized = false;
 bool g_DrawVisibilityInited = false;
 bool g_MeshletVisibilityInited = false;
@@ -194,8 +195,13 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 	case GLFW_KEY_M:
 		g_DebugParams.SwitchParam(DebugParam::MeshShading);
 		break;
-	case GLFW_KEY_T:
+	case GLFW_KEY_F:
 		g_DebugParams.SwitchParam(DebugParam::ToyDraw);
+		break;
+
+	case GLFW_KEY_T:
+		g_UseTaskSubmit = !g_UseTaskSubmit;
+		printf("Task submit: %d\n", g_UseTaskSubmit);
 		break;
 	}
 }
@@ -406,6 +412,13 @@ struct MeshDrawCommand
 #endif
 };
 
+struct MeshTaskCommand
+{
+	uint32_t drawId;
+	uint32_t taskOffset;
+	uint32_t taskCount;
+	uint32_t meshletVisibilityData; // low bit: draw visibility, higher 31 bit: meshVisibilityOffset
+};
 
 struct GpuBuffer
 {
@@ -613,6 +626,10 @@ struct PipelineManager
 	Niagara::ComputePipeline updateDrawArgsPipeline;
 	Niagara::ComputePipeline buildDepthPyramidPipeline;
 
+	// Tasks
+	GraphicsPipeline meshTaskPipeline;
+	ComputePipeline updateTaskArgsPipeline;
+
 	GraphicsPipeline toyDrawPipeline;
 
 	void Cleanup(const Niagara::Device &device)
@@ -621,9 +638,12 @@ struct PipelineManager
 		updateDrawArgsPipeline.Destroy(device);
 		buildDepthPyramidPipeline.Destroy(device);
 
-		meshDrawPass.Destroy(device);
+		meshTaskPipeline.Destroy(device);
+		updateTaskArgsPipeline.Destroy(device);
 
 		toyDrawPipeline.Destroy(device);
+
+		meshDrawPass.Destroy(device);
 	}
 };
 PipelineManager g_PipelineMgr{};
@@ -716,7 +736,7 @@ VkDebugUtilsMessengerEXT SetupDebugMessenger(VkInstance instance)
 
 #pragma region Pipeline
 
-void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, Niagara::RenderPass &renderPass, uint32_t subpass, const VkRect2D& viewportRect, const std::vector<VkFormat> &colorAttachmentFormats, VkFormat depthFormat = VK_FORMAT_UNDEFINED)
+void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, Niagara::RenderPass &renderPass, uint32_t subpass, const VkRect2D& viewportRect, const std::vector<VkFormat> &colorAttachmentFormats, VkFormat depthFormat = VK_FORMAT_UNDEFINED, bool bUseTaskSubmit = false)
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
 
@@ -756,7 +776,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 #endif
 
 	// Depth stencil state
-	if (renderPass.depthAttachment.format != VK_FORMAT_UNDEFINED)
+	if (depthFormat != VK_FORMAT_UNDEFINED)
 	{
 		auto& depthStencilState = pipelineState.depthStencilState;
 		depthStencilState.depthTestEnable = VK_TRUE;
@@ -786,6 +806,10 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 	// Use dynamic rendering
 	pipeline.SetAttachments(colorAttachmentFormats.data(), static_cast<uint32_t>(colorAttachmentFormats.size()), depthFormat);
 #endif
+
+	// Set specialization constants
+	if (bUseTaskSubmit)
+		pipeline.SetSpecializationConstant(0, 1);
 
 	pipeline.Init(device);
 }
@@ -869,7 +893,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 	// Init indirect draw count
 	{
-		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size), 0);
+		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, VkDeviceSize(0), VkDeviceSize(4), 0); // draw count / dispatch X groups
+		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, VkDeviceSize(4), VkDeviceSize(8), 1); // dispatch Y/Z groups
 
 		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size),
 			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
@@ -883,28 +908,25 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	{
 		const uint32_t GroupSize = 64;
 
-		VkDeviceSize drawCountOffset = drawCountBuffer.offset + pass * drawCountBuffer.stride;
+		VkDeviceSize drawCountOffset = drawCountBuffer.offset;
 		VkDeviceSize drawCountSize = drawCountBuffer.stride;
 
-#if 0
-		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(drawCountBuffer.offset),
-			VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-			VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-		g_CommandContext.PipelineBarriers2(cmd);
-
 		// Init draw call count
-		vkCmdFillBuffer(cmd, drawCountBuffer.buffer, drawCountOffset, drawCountSize, 0);
+		{
+			g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size),
+				VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+				VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.size), VkDeviceSize(drawCountBuffer.offset),
-			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT || VK_ACCESS_2_SHADER_WRITE_BIT);
-		g_CommandContext.BufferBarrier2(drawDataBuffer.buffer, VkDeviceSize(drawDataBuffer.size), VkDeviceSize(drawDataBuffer.offset),
-			VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-			VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT || VK_ACCESS_2_SHADER_WRITE_BIT);
+			g_CommandContext.PipelineBarriers2(cmd);
+			
+			vkCmdFillBuffer(cmd, drawCountBuffer.buffer, drawCountOffset, drawCountSize, 0); // draw count or dispatch X groups
 
-		g_CommandContext.PipelineBarriers2(cmd);
-#endif
+			g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size),
+				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+				VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+
+			g_CommandContext.PipelineBarriers2(cmd);
+		}
 
 		auto rasterizationStage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
 
@@ -933,7 +955,10 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.PipelineBarriers2(cmd);
 
 		// Update draw args
-		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.updateDrawArgsPipeline);
+		if (g_UseTaskSubmit)
+			g_CommandContext.BindPipeline(cmd, g_PipelineMgr.updateTaskArgsPipeline);
+		else
+			g_CommandContext.BindPipeline(cmd, g_PipelineMgr.updateDrawArgsPipeline);
 
 		// Uniforms
 		g_CommandContext.SetDescriptor(DescriptorBindings::ViewUniformBuffer, viewUniformBufferInfo);
@@ -959,11 +984,11 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		} states = { pass };
 		g_CommandContext.PushConstants(cmd, "_States", 0, sizeof(states), &states);
 
-		groupsX = Niagara::DivideAndRoundUp(drawArgsBuffer.elementCount, GroupSize);
+		groupsX = Niagara::DivideAndRoundUp(drawDataBuffer.elementCount, GroupSize);
 		vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
 
 		// Sync
-		g_CommandContext.BufferBarrier2(drawArgsBuffer.buffer, VkDeviceSize(0), VkDeviceSize(drawArgsBuffer.size), 
+		g_CommandContext.BufferBarrier2(drawArgsBuffer.buffer, VkDeviceSize(drawArgsBuffer.offset), VkDeviceSize(drawArgsBuffer.size),
 			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
 			VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
 		g_CommandContext.BufferBarrier2(drawCountBuffer.buffer, drawCountOffset, drawCountSize,
@@ -990,6 +1015,9 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	auto draw = [&](uint32_t pass, VkClearColorValue clearColor, VkClearDepthStencilValue clearDepth, uint32_t query)
 	{
 		pipelineQueryPool.BeginQuery(cmd, query);
+
+		VkDeviceSize drawCountOffset = drawCountBuffer.offset + 0;
+		VkDeviceSize drawCountSize = drawCountBuffer.stride;
 
 		if (pass == 0)
 		{
@@ -1024,7 +1052,10 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 
 		g_CommandContext.BeginRendering(cmd, viewportRect);
 
-		g_CommandContext.BindPipeline(cmd, g_PipelineMgr.meshDrawPipeline);
+		if (g_UseTaskSubmit)
+			g_CommandContext.BindPipeline(cmd, g_PipelineMgr.meshTaskPipeline);
+		else
+			g_CommandContext.BindPipeline(cmd, g_PipelineMgr.meshDrawPipeline);
 
 		// Descriptors
 
@@ -1081,18 +1112,22 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		VkDeviceSize offset = 0;
 		vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, &offset);
 
-		VkDeviceSize drawCountOffset = drawCountBuffer.offset + pass * drawCountBuffer.stride;
-		VkDeviceSize drawCountSize = drawCountBuffer.stride;
-
 #if USE_MESHLETS
 
 #if USE_MULTI_DRAW_INDIRECT
-		// vkCmdDrawMeshTasksIndirectNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
-		// vkCmdDrawMeshTasksIndirectCountNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, drawCountOffset, drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
-		vkCmdDrawMeshTasksIndirectCountEXT(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, drawCountOffset, drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+		if (g_UseTaskSubmit)
+		{
+			vkCmdDrawMeshTasksIndirectEXT(cmd, drawCountBuffer.buffer, drawCountOffset, 1, 12);
+		}
+		else
+		{
+			// vkCmdDrawMeshTasksIndirectNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawDataBuffer.elementCount, sizeof(MeshDrawCommand));
+			// vkCmdDrawMeshTasksIndirectCountNV(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, drawCountOffset, drawDataBuffer.elementCount, sizeof(MeshDrawCommand));
+			vkCmdDrawMeshTasksIndirectCountEXT(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawMeshTaskIndirectCommand), drawCountBuffer.buffer, drawCountOffset, drawDataBuffer.elementCount, sizeof(MeshDrawCommand));
+		}
 #else
 		uint32_t nTask = static_cast<uint32_t>(mesh.meshlets.size());
-		vkCmdDrawMeshTasksNV(cmd, Niagara::DivideAndRoundUp(nTask, 32), 0);
+		vkCmdDrawMeshTasksNV(cmd, Niagara::DivideAndRoundUp(nTask, TASK_GROUP_SIZE), 0);
 #endif
 
 #else // USE_MESHLETS
@@ -1100,8 +1135,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 #if USE_MULTI_DRAW_INDIRECT
-		// vkCmdDrawIndexedIndirect(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
-		vkCmdDrawIndexedIndirectCount(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawCountBuffer.buffer, drawCountOffset, drawArgsBuffer.elementCount, sizeof(MeshDrawCommand));
+		// vkCmdDrawIndexedIndirect(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawDataBuffer.elementCount, sizeof(MeshDrawCommand));
+		vkCmdDrawIndexedIndirectCount(cmd, drawArgsBuffer.buffer, offsetof(MeshDrawCommand, drawIndexedIndirectCommand), drawCountBuffer.buffer, drawCountOffset, drawDataBuffer.elementCount, sizeof(MeshDrawCommand));
 #else
 		vkCmdDrawIndexed(cmd, ib.elementCount, 1, 0, 0, 0);
 #endif
@@ -1234,7 +1269,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		g_CommandContext.SetDescriptor(0, meshBufferDescInfo);
 		g_CommandContext.SetDescriptor(1, drawBufferDescInfo);
 
-		DescriptorInfo drawCountBufferInfo(drawCountBuffer.buffer);
+		DescriptorInfo drawCountBufferInfo(drawCountBuffer.buffer, VkDeviceSize(drawCountBuffer.offset), VkDeviceSize(drawCountBuffer.size));
 		g_CommandContext.SetDescriptor(3, drawCountBufferInfo);
 		g_CommandContext.SetDescriptor(4, drawVisibilityInfo);
 
@@ -1559,13 +1594,23 @@ int main()
 	
 	// Pipeline
 	std::vector<VkFormat> colorAttachmentFormats = { colorFormat };
-	Niagara::GraphicsPipeline &pipeline = g_PipelineMgr.meshDrawPipeline;
-	GetMeshDrawPipeline(device, pipeline, meshDrawPass, 0, { {0, 0}, renderExtent }, colorAttachmentFormats, depthFormat);
+	Niagara::GraphicsPipeline &meshDrawPipeline = g_PipelineMgr.meshDrawPipeline;
+	GetMeshDrawPipeline(device, meshDrawPipeline, meshDrawPass, 0, { {0, 0}, renderExtent }, colorAttachmentFormats, depthFormat);
+
+	GraphicsPipeline& meshTaskPipeline = g_PipelineMgr.meshTaskPipeline;
+	GetMeshDrawPipeline(device, meshTaskPipeline, meshDrawPass, 0, { {0, 0}, renderExtent }, colorAttachmentFormats, depthFormat, true);
 
 	Niagara::ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
 	{
 		updateDrawArgsPipeline.compShader = &g_ShaderMgr.cullComp;
 		updateDrawArgsPipeline.Init(device);
+	}
+
+	Niagara::ComputePipeline& updateTaskArgsPipeline = g_PipelineMgr.updateTaskArgsPipeline;
+	{
+		updateTaskArgsPipeline.compShader = &g_ShaderMgr.cullComp;
+		updateTaskArgsPipeline.SetSpecializationConstant(0, 1);
+		updateTaskArgsPipeline.Init(device);
 	}
 
 	Niagara::ComputePipeline& buildDepthPyramidPipeline = g_PipelineMgr.buildDepthPyramidPipeline;
@@ -1579,6 +1624,7 @@ int main()
 		toyDrawPipeline.meshShader = &g_ShaderMgr.toyMesh;
 		toyDrawPipeline.fragShader = &g_ShaderMgr.toyFullScreenFrag;
 		toyDrawPipeline.SetAttachments(colorAttachmentFormats.data(), static_cast<uint32_t>(colorAttachmentFormats.size()));
+		// toyDrawPipeline.SetSpecializationConstant(0, 1); // specialization constant
 		toyDrawPipeline.Init(device);
 	}
 
@@ -1660,7 +1706,7 @@ int main()
 #if DEBUG_SINGLE_DRAWCALL
 	const uint32_t DrawCount = 5; //  DRAW_COUNT;
 
-	float testZ = 8.0f, farZ = -10.0f;
+	float testZ = 7.0f, farZ = -10.0f;
 	std::vector<glm::vec3> positions
 	{
 		glm::vec3(0.0f, 0.0f, testZ + 0.5), glm::vec3(3.0f, 0.0f, testZ), glm::vec3(-1.8f, 2.0f, testZ),
@@ -1673,15 +1719,19 @@ int main()
 
 	g_ViewUniformBufferParameters.drawCount = DrawCount;
 
+	std::srand(42);
+
 	std::vector<MeshDraw> meshDraws(DrawCount);
 	uint32_t meshletVisibilityCount = 0;
+	uint32_t taskGroupCount = 0;
 	for (uint32_t i = 0; i < DrawCount; ++i)
 	{
 		auto& draw = meshDraws[i];
 
 		// World matrix
 		auto t = glm::ballRand<float>(SceneRadius);
-		auto s = glm::vec3(glm::linearRand(1.0f, 2.0f));
+		auto s = glm::linearRand(1.0f, 2.0f);
+		s *= 2.0f;
 		
 		auto theta = glm::radians(glm::linearRand<float>(0.0f, 180.0));
 		auto axis = glm::sphericalRand(1.0f);
@@ -1689,11 +1739,16 @@ int main()
 
 #if DEBUG_SINGLE_DRAWCALL
 		t = positions[i];
-		s = glm::vec3(1.0f);
+		s = 1.0f;
 		r = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 #endif
 
-		glm::mat4 worldMat = glm::translate(glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), s), t);
+		glm::mat4 worldMat = glm::mat4_cast(r);
+		worldMat[0] = worldMat[0] * s;
+		worldMat[1] = worldMat[1] * s;
+		worldMat[2] = worldMat[2] * s;
+		worldMat[3] = glm::vec4(t.x, t.y, t.z, +1.0f);
+
 		draw.worldMatRow0 = glm::vec4(worldMat[0][0], worldMat[1][0], worldMat[2][0], worldMat[3][0]);
 		draw.worldMatRow1 = glm::vec4(worldMat[0][1], worldMat[1][1], worldMat[2][1], worldMat[3][1]);
 		draw.worldMatRow2 = glm::vec4(worldMat[0][2], worldMat[1][2], worldMat[2][2], worldMat[3][2]);
@@ -1707,9 +1762,10 @@ int main()
 		draw.meshletVisibilityOffset = meshletVisibilityCount;
 
 		meshletVisibilityCount += mesh.lods[0].meshletCount;
+		taskGroupCount += DivideAndRoundUp(mesh.lods[0].meshletCount, TASK_GROUP_SIZE);
 	}
 
-	printf("Total meshlet visibility count: %d\n", meshletVisibilityCount);
+	printf("Total meshlet visibility count: %d, total task group count: %d.\n", meshletVisibilityCount, taskGroupCount);
 
 	// Indirect draw command buffer
 	GpuBuffer& drawBuffer = g_BufferMgr.drawDataBuffer;
@@ -1717,11 +1773,15 @@ int main()
 		deviceLocalMemPropertyFlags, meshDraws.data());
 
 	GpuBuffer& drawArgsBuffer = g_BufferMgr.drawArgsBuffer;
+#if 0
 	drawArgsBuffer.Init(device, sizeof(MeshDrawCommand), DrawCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, deviceLocalMemPropertyFlags);
+#else
+	drawArgsBuffer.Init(device, 4, g_BufferSize/4, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, deviceLocalMemPropertyFlags);
+#endif
 
-	const uint32_t maxPassCount = 2;
+	const uint32_t drawCountArgsCount = 3; // draw count or dispatch task X/Y/Z groups
 	GpuBuffer& drawCountBuffer = g_BufferMgr.drawCountBuffer;
-	drawCountBuffer.Init(device, sizeof(uint32_t), maxPassCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
+	drawCountBuffer.Init(device, sizeof(uint32_t), drawCountArgsCount, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 
 	GpuBuffer& drawVisibilityBuffer = g_BufferMgr.drawVisibilityBuffer;
 	drawVisibilityBuffer.Init(device, sizeof(uint32_t), DrawCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
@@ -1735,7 +1795,8 @@ int main()
 	meshletDataBuffer.Init(device, sizeof(uint32_t), static_cast<uint32_t>(geometry.meshletData.size()), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags, geometry.meshletData.data());
 
 	GpuBuffer& meshletVisibilityBuffer = g_BufferMgr.meshletVisibilityBuffer;
-	meshletVisibilityBuffer.Init(device, sizeof(uint32_t), meshletVisibilityCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
+	uint32_t mvbSize = DivideAndRoundUp(meshletVisibilityCount, 32); // 1 bit per meshlet visibility
+	meshletVisibilityBuffer.Init(device, sizeof(uint32_t), mvbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 #endif
 
 	// Frame time
@@ -1747,7 +1808,7 @@ int main()
 	double avgGpuFrame = 0.0;
 
 	// Pipeline statistics
-	uint32_t pipelineQueryResults[2] = {};
+	uint32_t pipelineQueryResults[4] = {};
 	uint32_t triangleCount = 0;
 
 	// Resize
@@ -1861,7 +1922,6 @@ int main()
 		// Only reset the fence if we are submitting work
 		vkResetFences(device, 1, &currentSyncObjects.inFlightFence);
 
-
 		Render(currentCommandBuffer, framebuffers, swapchain, imageIndex, geometry, graphicsQueue, currentSyncObjects);
 
 		{
@@ -1906,16 +1966,15 @@ int main()
 		}
 
 		// Pipeline queries
-		// TODO: It does not return valid values ???
 		double trianglesPerSec = 0;
 		{
-			g_CommonQueryPools.queryPools[1].GetResults(device, 0, 1, sizeof(pipelineQueryResults), pipelineQueryResults, sizeof(uint32_t), VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+			g_CommonQueryPools.queryPools[1].GetResults(device, 0, 2, sizeof(pipelineQueryResults), pipelineQueryResults, sizeof(uint32_t), VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
 
 			triangleCount = pipelineQueryResults[0] + pipelineQueryResults[1];
 		}
 
 		char title[256];
-		sprintf_s(title, "Cpu %.2f ms, Gpu %.2f ms, Tris %.2fM", avgCpuFrame, avgGpuFrame, double(triangleCount) * 1e-1);
+		sprintf_s(title, "Cpu %.2f ms, Gpu %.2f ms, Tris %.2fM", avgCpuFrame, avgGpuFrame, double(triangleCount) * 1e-6);
 		glfwSetWindowTitle(window, title);
 	}
 

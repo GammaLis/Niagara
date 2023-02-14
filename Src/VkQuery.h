@@ -15,7 +15,7 @@ namespace Niagara
 		VkQueryPool queryPool{ VK_NULL_HANDLE };
 		VkQueryType type;
 		uint32_t count;
-		VkQueryPipelineStatisticFlags pipelineStaticsFlags;
+		VkQueryPipelineStatisticFlags pipelineStatisticFlags;
 
 	private:
 		uint32_t activeQueryCount{ 0 };
