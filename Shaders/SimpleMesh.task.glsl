@@ -260,17 +260,6 @@ void main()
 		uint index = atomicAdd(sh_MeshletCount, 1);
 		payload.meshletIndices[index] = meshletIndex;
 	}
-	
-	// Sync
-	barrier(); // memoryBarrierShared();
-
-	if (localThreadId == 0)
-	{
-		uint groupCountX = sh_MeshletCount;
-      	uint groupCountY = 1;
-      	uint groupCountZ = 1;
-		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
-	}
 
 	if (pass > 0 && valid)
 	{
@@ -284,6 +273,22 @@ void main()
 			atomicAnd(meshletVisibilities[(meshletVisibilityIndex >> 5)], ~meshletVisibilityUInt);
 	#endif
 	}
+	
+	// Sync
+	barrier(); // memoryBarrierShared();
+
+	// Ref: https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_mesh_shader.adoc
+	// EmitMeshTasksEXT, which takes as input a number of mesh shader groups to emit, and a payload variable that will be visible to 
+	// all mesh shader invocations launched by this instruction. **This instruction is executed once per workgroup rather than per-invocation**, 
+	// and the payload itself is in a workgroup-wide storage class, similar to shared memory. 
+	// **Once this instruction is called, the workgroup is terminated immediately, and the mesh shaders are launched**.
+	// if (localThreadId == 0)
+	{
+		uint groupCountX = sh_MeshletCount;
+      	uint groupCountY = 1;
+      	uint groupCountZ = 1;
+		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
+	}
 
 #endif
 
@@ -291,11 +296,12 @@ void main()
 	if (meshletIndex < meshletMaxIndex)
 		payload.meshletIndices[localThreadId] = meshletIndex;
 
-	if (localThreadId == 0)
+	// if (localThreadId == 0)
 	{
 		uint groupCountX = min(TASK_GROUP_SIZE, meshletCount - groupId * TASK_GROUP_SIZE); // localThreadIdStart
       	uint groupCountY = 1;
       	uint groupCountZ = 1;
+      	// Single workgroup-uniform call
 		EmitMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
 	}
 #endif

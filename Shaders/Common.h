@@ -1,7 +1,9 @@
 #ifndef COMMON_INCLUDED
 #define COMMON_INCLUDED
 
+#ifndef DESC_VIEW_UNIFORMS
 #define DESC_VIEW_UNIFORMS 7
+#endif
 
 layout (set = 0, binding = DESC_VIEW_UNIFORMS) uniform ViewUniformBufferParameters
 {
@@ -29,6 +31,12 @@ const float PI = 3.1415926535897932f;
 #endif
 
 /// Functions
+
+vec3 SafeNormalize(vec3 n)
+{
+    float d = dot(n, n);
+    return (d < EPS) ? vec3(0.0) : n / sqrt(d);
+}
 
 mat4 BuildWorldMatrix(vec4 row0, vec4 row1, vec4 row2)
 {

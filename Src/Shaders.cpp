@@ -1,4 +1,5 @@
 #include "Shaders.h"
+#include "VkCommon.h"
 #include "Device.h"
 #include "Utilities.h"
 #include <spirv-headers/spirv.h>

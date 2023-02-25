@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -106,7 +106,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_GLFW_WIN32;VK_USE_PLATFORM_WIN32_KHR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\volk;..\External\glfw\include;..\External\glm;..\External\SPIRV-Cross;..\External\fast_obj;..\External\meshoptimizer\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\volk;..\External\glfw\include;..\External\glm;..\External\SPIRV-Cross;..\External\fast_obj;..\External\meshoptimizer\src;..\External\VulkanMemoryAllocator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -188,12 +188,14 @@
     <ClCompile Include="..\External\SPIRV-Cross\spirv_glsl.cpp" />
     <ClCompile Include="..\External\SPIRV-Cross\spirv_parser.cpp" />
     <ClCompile Include="..\External\volk\volk.c" />
+    <ClCompile Include="Buffer.cpp" />
     <ClCompile Include="Camera.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="Geometry.cpp" />
     <ClCompile Include="Image.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Metaballs.cpp" />
     <ClCompile Include="Pipeline.cpp" />
     <ClCompile Include="RenderPass.cpp" />
     <ClCompile Include="Shaders.cpp" />
@@ -201,6 +203,7 @@
     <ClCompile Include="Swapchain.cpp" />
     <ClCompile Include="Utilities.cpp" />
     <ClCompile Include="VkCommon.cpp" />
+    <ClCompile Include="VkMemoryAllocator.cpp" />
     <ClCompile Include="VkQuery.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -217,6 +220,9 @@
     <ClInclude Include="..\External\SPIRV-Cross\spirv_glsl.hpp" />
     <ClInclude Include="..\External\SPIRV-Cross\spirv_parser.hpp" />
     <ClInclude Include="..\External\volk\volk.h" />
+    <ClInclude Include="Buffer.h" />
+    <ClInclude Include="MarchingCubesLookup.h" />
+    <ClInclude Include="Metaballs.h" />
     <ClInclude Include="VkQuery.h" />
     <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
       <FileType>Document</FileType>
@@ -250,6 +256,12 @@
       <FileType>Document</FileType>
     </CustomBuild>
     <CustomBuild Include="..\Shaders\ToyMesh.mesh.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\Metaball.mesh.glsl">
+      <FileType>Document</FileType>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\Metaball.task.glsl">
       <FileType>Document</FileType>
     </CustomBuild>
   </ItemGroup>

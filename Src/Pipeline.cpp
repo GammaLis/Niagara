@@ -199,7 +199,7 @@ namespace Niagara
 		return entries;
 	}
 
-	VkDescriptorSetLayout Pipeline::CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported) const
+	VkDescriptorSetLayout Pipeline::CreateDescriptorSetLayout(const Device& device, bool pushDescriptorsSupported) const
 	{
 		auto shaders = GetPipelineShaders();
 		assert(!shaders.empty());
@@ -218,7 +218,7 @@ namespace Niagara
 		return setLayout;
 	}
 
-	std::vector<VkDescriptorSetLayout> Pipeline::CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported) const
+	std::vector<VkDescriptorSetLayout> Pipeline::CreateDescriptorSetLayouts(const Device& device, bool pushDescriptorsSupported) const
 	{
 		std::vector<VkDescriptorSetLayout> setLayouts;
 
@@ -251,7 +251,7 @@ namespace Niagara
 		return setLayouts;
 	}
 
-	VkDescriptorUpdateTemplate Pipeline::CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setLayoutIndex, bool pushDescriptorsSupported) const
+	VkDescriptorUpdateTemplate Pipeline::CreateDescriptorUpdateTemplate(const Device& device, VkPipelineBindPoint bindPoint, uint32_t setLayoutIndex, bool pushDescriptorsSupported) const
 	{
 		std::vector<VkDescriptorUpdateTemplateEntry> entries = GetDescriptorUpdateTemplateEntries(setLayoutIndex);
 
@@ -293,7 +293,7 @@ namespace Niagara
 		constantState.SetConstant(constantId, value);
 	}
 
-	VkPipelineLayout Pipeline::CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported) const
+	VkPipelineLayout Pipeline::CreatePipelineLayout(const Device& device, bool pushDescriptorSupported) const
 	{
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
 		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -397,7 +397,7 @@ namespace Niagara
 		setInfo.count = setEnd - setInfo.start;
 	}
 
-	void Pipeline::Init(VkDevice device)
+	void Pipeline::Init(const Device& device)
 	{
 		assert(ShadersValid());
 
@@ -428,7 +428,7 @@ namespace Niagara
 		assert(!shaderStagesInfo.empty());
 	}
 
-	void Pipeline::Destroy(VkDevice device)
+	void Pipeline::Destroy(const Device& device)
 	{
 		if (!descriptorSetLayouts.empty())
 		{
@@ -465,7 +465,7 @@ namespace Niagara
 
 	/// Graphics pipeline
 
-	void GraphicsPipeline::Init(VkDevice device)
+	void GraphicsPipeline::Init(const Device& device)
 	{
 		assert(renderPass != nullptr || (!colorAttachmentFormats.empty() || depthAttachmentFormat != VK_FORMAT_UNDEFINED));
 
@@ -521,7 +521,7 @@ namespace Niagara
 		assert(pipeline);
 	}
 
-	void GraphicsPipeline::Destroy(VkDevice device)
+	void GraphicsPipeline::Destroy(const Device& device)
 	{
 		Pipeline::Destroy(device);
 	}
@@ -560,7 +560,7 @@ namespace Niagara
 
 	/// Compute pipeline
 
-	void ComputePipeline::Init(VkDevice device)
+	void ComputePipeline::Init(const Device& device)
 	{
 		Pipeline::Init(device);
 
@@ -579,7 +579,7 @@ namespace Niagara
 		assert(pipeline);
 	}
 
-	void ComputePipeline::Destroy(VkDevice device)
+	void ComputePipeline::Destroy(const Device& device)
 	{
 		Pipeline::Destroy(device);
 	}

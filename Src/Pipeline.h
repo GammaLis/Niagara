@@ -250,8 +250,8 @@ namespace Niagara
 
 		void UpdateDescriptorSetInfo(DescriptorSetInfo &setInfo, uint32_t set = 0) const;
 
-		virtual void Init(VkDevice device);
-		virtual void Destroy(VkDevice device);
+		virtual void Init(const Device &device);
+		virtual void Destroy(const Device& device);
 
 		virtual std::vector<const Shader*> GetPipelineShaders() const = 0;
 		virtual bool ShadersValid() const = 0;
@@ -263,12 +263,12 @@ namespace Niagara
 		std::vector<VkPipelineShaderStageCreateInfo> GetShaderStagesCreateInfo() const;
 		std::vector<VkDescriptorSetLayoutBinding> GetDescriptorBindings(uint32_t set = 0) const;
 		std::vector<VkDescriptorUpdateTemplateEntry> GetDescriptorUpdateTemplateEntries(uint32_t set = 0) const;
-		VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device, bool pushDescriptorsSupported = true) const;
-		std::vector<VkDescriptorSetLayout> CreateDescriptorSetLayouts(VkDevice device, bool pushDescriptorsSupported = true) const;
-		VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, uint32_t setIndex = 0, bool pushDescriptorsSupported = true) const;
+		VkDescriptorSetLayout CreateDescriptorSetLayout(const Device& device, bool pushDescriptorsSupported = true) const;
+		std::vector<VkDescriptorSetLayout> CreateDescriptorSetLayouts(const Device& device, bool pushDescriptorsSupported = true) const;
+		VkDescriptorUpdateTemplate CreateDescriptorUpdateTemplate(const Device& device, VkPipelineBindPoint bindPoint, uint32_t setIndex = 0, bool pushDescriptorsSupported = true) const;
 		std::vector<VkPushConstantRange> CreatePushConstantRanges() const;
 		VkSpecializationInfo CreateSpecializationInfo();
-		VkPipelineLayout CreatePipelineLayout(VkDevice device, bool pushDescriptorSupported = true) const;
+		VkPipelineLayout CreatePipelineLayout(const Device& device, bool pushDescriptorSupported = true) const;
 	};
 
 	class GraphicsPipeline : public Pipeline
@@ -286,8 +286,8 @@ namespace Niagara
 		std::vector<VkFormat> colorAttachmentFormats;
 		VkFormat depthAttachmentFormat{ VK_FORMAT_UNDEFINED };
 
-		virtual void Init(VkDevice device) override;
-		virtual void Destroy(VkDevice device) override;
+		virtual void Init(const Device& device) override;
+		virtual void Destroy(const Device& device) override;
 
 		virtual std::vector<const Shader*> GetPipelineShaders() const override;
 
@@ -305,8 +305,8 @@ namespace Niagara
 	public:
 		const Shader *compShader{ nullptr };
 
-		virtual void Init(VkDevice device) override;
-		virtual void Destroy(VkDevice device) override;
+		virtual void Init(const Device& device) override;
+		virtual void Destroy(const Device& device) override;
 
 		virtual std::vector<const Shader*> GetPipelineShaders() const override
 		{

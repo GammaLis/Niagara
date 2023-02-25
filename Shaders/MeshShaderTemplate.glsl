@@ -1,5 +1,5 @@
-// Ref: https://rg3.name/202210222107.html
-// My mesh shaders talk at XDC 2022
+// Ref: My mesh shaders talk at XDC 2022, https://rg3.name/202210222107.html
+// Ref: https://www.khronos.org/blog/mesh-shading-for-vulkan
 
 #version 450
 #extension GL_EXT_mesh_shader : enable
@@ -47,3 +47,16 @@ perprimitiveEXT out gl_MeshPerPrimitiveEXT {
 	bool gl_CullPrimitiveEXT;
 	int gl_PrimitiveShadingRateEXT;
 } gl_MeshPrimitivesEXT[];
+
+
+// Task shaders
+/**
+ * Task shader dispatching mesh shader workgroups
+ * Single workgroup-uniform call to EmitMeshTasksEXT(x, y, z);
+ *
+ * Ref: https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_mesh_shader.adoc
+ * EmitMeshTasksEXT, which takes as input a number of mesh shader groups to emit, and a payload variable that will be visible to 
+ * all mesh shader invocations launched by this instruction. **This instruction is executed once per workgroup rather than per-invocation**, 
+ * and the payload itself is in a workgroup-wide storage class, similar to shared memory. 
+ * **Once this instruction is called, the workgroup is terminated immediately, and the mesh shaders are launched**.
+ */

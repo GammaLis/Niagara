@@ -11,6 +11,7 @@
 #pragma once
 
 #include "pch.h"
+#include <vk_mem_alloc.h>
 
 
 namespace Niagara
@@ -47,6 +48,8 @@ namespace Niagara
 		std::vector<std::string> supportedExtensions;
 		// Default command pool for the graphics queue family index
 		VkCommandPool commandPool = VK_NULL_HANDLE;
+		// VMA allocator
+		VmaAllocator memoryAllocator{ VK_NULL_HANDLE };
 		// Set to true when the debug marker extension is detected
 		bool enableDebugMarkers = false;
 		// Contains queue family indices
@@ -77,6 +80,9 @@ namespace Niagara
 		VkCommandPool CreateCommandPool(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags createFlags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT) const;
 		VkFormat GetSupportedDepthFormat(bool bCheckSamplingSupport) const;
 		bool IsExtensionSupported(const std::string &extension) const;
+		
+		VmaAllocator CreateMemoryAllocator();
+		void DestroyMemoryAllocator();
 	};
 
 	extern Device* g_Device;

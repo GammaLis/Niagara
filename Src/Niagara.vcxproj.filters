@@ -28,6 +28,9 @@
     <Filter Include="spirv-cross">
       <UniqueIdentifier>{0171d7b6-935c-4c33-8e88-8c8f081e542e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Metaball">
+      <UniqueIdentifier>{c679bcfb-bb73-416c-8f4c-cce8e6314084}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -204,6 +207,15 @@
     <ClCompile Include="VkQuery.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Buffer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Metaballs.cpp">
+      <Filter>Metaball</Filter>
+    </ClCompile>
+    <ClCompile Include="VkMemoryAllocator.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -293,6 +305,15 @@
     <ClInclude Include="VkQuery.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Metaballs.h">
+      <Filter>Metaball</Filter>
+    </ClInclude>
+    <ClInclude Include="MarchingCubesLookup.h">
+      <Filter>Metaball</Filter>
+    </ClInclude>
+    <ClInclude Include="Buffer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\Shaders\SimpleTriangle.frag.glsl">
@@ -323,6 +344,12 @@
       <Filter>Shaders</Filter>
     </CustomBuild>
     <CustomBuild Include="..\Shaders\ToyFullScreen.frag.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\Metaball.mesh.glsl">
+      <Filter>Shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="..\Shaders\Metaball.task.glsl">
       <Filter>Shaders</Filter>
     </CustomBuild>
   </ItemGroup>

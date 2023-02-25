@@ -10,11 +10,14 @@
 #include "Pipeline.h"
 #include "CommandManager.h"
 #include "Image.h"
+#include "Buffer.h"
 #include "Camera.h"
 #include "Utilities.h"
 #include "Config.h"
 #include "Geometry.h"
 #include "VkQuery.h"
+
+#include "Metaballs.h"
 
 #include <iostream>
 #include <fstream>
@@ -37,6 +40,7 @@ const std::string g_ShaderPath = "./CompiledShaders/";
 GLFWwindow* g_Window = nullptr;
 VkExtent2D g_ViewportSize{};
 double g_DeltaTime = 0.0;
+double g_Time = 0.0;
 bool g_UseTaskSubmit = false;
 bool g_FramebufferResized = false;
 bool g_DrawVisibilityInited = false;
@@ -513,7 +517,7 @@ struct GpuBuffer
 			vkDestroyBuffer(device, buffer, nullptr);
 	}
 
-	operator VkBuffer() const { buffer; }
+	operator VkBuffer() const { return buffer; }
 };
 
 struct alignas(16) ViewUniformBufferParameters
@@ -736,7 +740,7 @@ VkDebugUtilsMessengerEXT SetupDebugMessenger(VkInstance instance)
 
 #pragma region Pipeline
 
-void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, Niagara::RenderPass &renderPass, uint32_t subpass, const VkRect2D& viewportRect, const std::vector<VkFormat> &colorAttachmentFormats, VkFormat depthFormat = VK_FORMAT_UNDEFINED, bool bUseTaskSubmit = false)
+void GetMeshDrawPipeline(const Device &device, GraphicsPipeline& pipeline, RenderPass &renderPass, uint32_t subpass, const VkRect2D& viewportRect, const std::vector<VkFormat> &colorAttachmentFormats, VkFormat depthFormat = VK_FORMAT_UNDEFINED, bool bUseTaskSubmit = false)
 {
 #if DRAW_MODE == DRAW_SIMPLE_MESH
 
@@ -748,6 +752,7 @@ void GetMeshDrawPipeline(VkDevice device, Niagara::GraphicsPipeline& pipeline, N
 	pipeline.vertShader = &g_ShaderMgr.meshVert;
 #endif
 	pipeline.fragShader = &g_ShaderMgr.meshFrag;
+
 #endif
 
 	// Pipeline states
@@ -1228,18 +1233,79 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 	pipelineQueryPool.Reset(cmd);
 
 	// Early cull : frustum cull & fill objects that were visible last frame
-	cull(/* pass =  */ 0);
+	cull(/* pass = */ 0);
 	// Early draw : render objects that were visible last frame
-	draw(/* pass =  */ 0, clearColor, clearDepth, /* query = */ 0);
+	draw(/* pass = */ 0, clearColor, clearDepth, /* query = */ 0);
 
 	buildDepthPyramid();
 	// Late cull : frustum cull & fill objects that were not visible last frame
-	cull(/* pass =  */ 1);
+	cull(/* pass = */ 1);
 	// Late draw : render objects that are visible this frame but weren't drawn in the early pass
-	draw(/* pass =  */ 1, clearColor, clearDepth, /* query = */ 1);
+	draw(/* pass = */ 1, clearColor, clearDepth, /* query = */ 1);
 
 	// TODO: Update the final depth pyramid
 	// ...
+
+#if DRAW_METABALLS
+	{
+		const glm::uvec3 TaskGroupSize{ 4,4,4 };
+		const uint32_t TaskMeshletSize = 1;
+		float time = static_cast<float>(g_Time) * 0.001f;
+
+		// Ref: https://www.shadertoy.com/view/ld2GRz
+		auto hash1 = [](float n) { return glm::fract(sin(n) * 43758.5453123f); };
+		auto hash2 = [](float n) { return glm::fract(glm::sin(glm::vec2(n, n + 1.0f)) * glm::vec2(43758.5453123f, 22578.1459123f)); };
+		auto hash3 = [](float n) { return glm::fract(glm::sin(glm::vec3(n, n + 1.0f, n + 2.0f)) * glm::vec3(43758.5453123f, 22578.1459123f, 19642.3490423f)); };
+
+		// Update metaballs
+		float frameTime = 0.01f * std::min(0.1f, static_cast<float>(g_DeltaTime));
+		const uint32_t MaxBallCount = Metaballs::s_MaxBallCount;
+		for (uint32_t i = 0; i < MaxBallCount; ++i)
+		{
+			auto& ball = g_Metaballs.balls[i];
+
+			float h = float(i) / float(MaxBallCount);
+			ball.p = 2.0f * glm::sin( 6.2831f * hash3(h*1.17f) + hash3(h*13.7f) * time );
+			ball.r = 1.7f + 0.9f * std::sin(6.28f * hash1(h * 23.13f));
+		}
+		g_Metaballs.metaballBuffer.Update(g_Metaballs.balls, sizeof(g_Metaballs.balls));
+
+		CommandContext::Attachment colorAttachment(&colorBuffer.views[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		LoadStoreInfo colorLoadStoreInfo(VK_ATTACHMENT_LOAD_OP_CLEAR); // VK_ATTACHMENT_LOAD_OP_DONT_CARE
+		CommandContext::Attachment depthAttachment(&depthBuffer.views[0], depthAttachmentLayout);
+		LoadStoreInfo depthLoadStoreInfo(VK_ATTACHMENT_LOAD_OP_LOAD);
+		g_CommandContext.SetAttachments(&colorAttachment, 1, &colorLoadStoreInfo, &clearColor, 
+			&depthAttachment, &depthLoadStoreInfo, &clearDepth);
+
+		vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
+		vkCmdSetScissor(cmd, 0, 1, &viewportRect);
+
+		g_CommandContext.BeginRendering(cmd, viewportRect);
+
+		g_CommandContext.BindPipeline(cmd, g_Metaballs.metaballPipeline);
+
+		struct Constants
+		{
+			glm::vec4 bmin;
+			glm::vec4 bsize;
+			glm::uvec4 resolution;
+		} constants = { glm::vec4(-5.0f, -5.0f, -5.0f, 0.0f), glm::vec4(10.0f, 10.0f, 10.0f, 0.0f), glm::uvec4(Metaballs::s_Resolution) };
+		constants.resolution.w = MaxBallCount;
+		g_CommandContext.PushConstants(cmd, "_Constants", 0, sizeof(constants), &constants);
+
+		g_CommandContext.SetDescriptor(0, viewUniformBufferInfo);
+		g_CommandContext.SetDescriptor(1, g_Metaballs.marchingCubesLookupBuffer.GetDescriptorInfo());
+		g_CommandContext.SetDescriptor(2, g_Metaballs.metaballBuffer.GetDescriptorInfo());
+		g_CommandContext.PushDescriptorSetWithTemplate(cmd);
+
+		groupsX = DivideAndRoundUp(Metaballs::s_Resolution / TaskMeshletSize, TaskGroupSize.x);
+		groupsY = DivideAndRoundUp(Metaballs::s_Resolution / TaskMeshletSize, TaskGroupSize.y);
+		groupsZ = DivideAndRoundUp(Metaballs::s_Resolution / TaskMeshletSize, TaskGroupSize.z);
+		vkCmdDrawMeshTasksEXT(cmd, groupsX, groupsY, groupsZ);
+
+		g_CommandContext.EndRendering(cmd);
+	}
+#endif
 
 	// Toy draw pass
 	auto toyDraw = [&](VkCommandBuffer cmd, Image &colorBuffer, VkImageLayout oldLayout, VkPipelineStageFlags2 srcStageMask, VkAccessFlagBits2 srcAccessMask)
@@ -1506,8 +1572,6 @@ int main()
 	features11.storageBuffer16BitAccess = VK_TRUE;
 	features11.uniformAndStorageBuffer16BitAccess = VK_TRUE;
 	features11.storagePushConstant16 = VK_TRUE;
-	// TODO: Can not create device if enabled
-	// features11.storageInputOutput16 = VK_TRUE;
 	features11.shaderDrawParameters = VK_TRUE;
 
 	features12.pNext = &features11;
@@ -1594,26 +1658,26 @@ int main()
 	
 	// Pipeline
 	std::vector<VkFormat> colorAttachmentFormats = { colorFormat };
-	Niagara::GraphicsPipeline &meshDrawPipeline = g_PipelineMgr.meshDrawPipeline;
+	GraphicsPipeline &meshDrawPipeline = g_PipelineMgr.meshDrawPipeline;
 	GetMeshDrawPipeline(device, meshDrawPipeline, meshDrawPass, 0, { {0, 0}, renderExtent }, colorAttachmentFormats, depthFormat);
 
 	GraphicsPipeline& meshTaskPipeline = g_PipelineMgr.meshTaskPipeline;
 	GetMeshDrawPipeline(device, meshTaskPipeline, meshDrawPass, 0, { {0, 0}, renderExtent }, colorAttachmentFormats, depthFormat, true);
 
-	Niagara::ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
+	ComputePipeline &updateDrawArgsPipeline = g_PipelineMgr.updateDrawArgsPipeline;
 	{
 		updateDrawArgsPipeline.compShader = &g_ShaderMgr.cullComp;
 		updateDrawArgsPipeline.Init(device);
 	}
 
-	Niagara::ComputePipeline& updateTaskArgsPipeline = g_PipelineMgr.updateTaskArgsPipeline;
+	ComputePipeline& updateTaskArgsPipeline = g_PipelineMgr.updateTaskArgsPipeline;
 	{
 		updateTaskArgsPipeline.compShader = &g_ShaderMgr.cullComp;
 		updateTaskArgsPipeline.SetSpecializationConstant(0, 1);
 		updateTaskArgsPipeline.Init(device);
 	}
 
-	Niagara::ComputePipeline& buildDepthPyramidPipeline = g_PipelineMgr.buildDepthPyramidPipeline;
+	ComputePipeline& buildDepthPyramidPipeline = g_PipelineMgr.buildDepthPyramidPipeline;
 	{
 		buildDepthPyramidPipeline.compShader = &g_ShaderMgr.buildHiZComp;
 		buildDepthPyramidPipeline.Init(device);
@@ -1799,6 +1863,10 @@ int main()
 	meshletVisibilityBuffer.Init(device, sizeof(uint32_t), mvbSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, deviceLocalMemPropertyFlags);
 #endif
 
+	// Renderers
+	g_Metaballs.Init(device, colorAttachmentFormats, depthFormat);
+
+	g_Time = 0.0;
 	// Frame time
 	uint32_t currentFrame = 0;
 	double currentFrameTime = glfwGetTime() * 1000.0;
@@ -1948,6 +2016,7 @@ int main()
 		{
 			double frameEndTime = glfwGetTime() * 1000.0;
 			g_DeltaTime = frameEndTime - currentFrameTime;
+			g_Time += g_DeltaTime;
 			currentFrameTime = frameEndTime;
 
 			avgCpuFrame = avgCpuFrame * 0.95 + g_DeltaTime * 0.05;
@@ -1986,10 +2055,13 @@ int main()
 
 	// SPACE
 
+	// Clean up renderers
+
+	g_Metaballs.Destroy(device);
+
 	// Clean up Vulkan
 
 	// Resources
-
 	for (auto &frameResource : frameResources)
 		frameResource.Cleanup(device);
 	

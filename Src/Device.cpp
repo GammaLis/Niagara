@@ -252,11 +252,19 @@ namespace Niagara
 			return false;
 		}
 
+		// Create a default command pool for graphics command buffers
+		commandPool = CreateCommandPool(queueFamilyIndices.graphics);
+
+		// Creat Vulkan memory allocator
+		memoryAllocator = CreateMemoryAllocator();
+
 		return true;
 	}
 
 	void Device::Destroy()
 	{
+		DestroyMemoryAllocator();
+
 		if (commandPool)
 			vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
 
@@ -505,9 +513,6 @@ namespace Niagara
 		if (result != VK_SUCCESS)
 			throw std::runtime_error("Can not create device");
 
-		// Create a default command pool for graphics command buffers
-		commandPool = CreateCommandPool(queueFamilyIndices.graphics);
-
 		return result;
 	}
 
@@ -556,5 +561,63 @@ namespace Niagara
 	bool Device::IsExtensionSupported(const std::string& extension) const
 	{
 		return std::find(supportedExtensions.begin(), supportedExtensions.end(), extension) != supportedExtensions.end();
+	}
+
+	VmaAllocator Device::CreateMemoryAllocator()
+	{
+		DestroyMemoryAllocator();
+
+		bool canGetMemoryRequirements = IsExtensionSupported(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
+		bool hasDedicatedAllocation = IsExtensionSupported(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
+
+		VmaVulkanFunctions vmaVkFuncs{};
+		vmaVkFuncs.vkAllocateMemory						= vkAllocateMemory;
+		vmaVkFuncs.vkBindBufferMemory					= vkBindBufferMemory;
+		vmaVkFuncs.vkBindImageMemory					= vkBindImageMemory;
+		vmaVkFuncs.vkCreateBuffer						= vkCreateBuffer;
+		vmaVkFuncs.vkCreateImage						= vkCreateImage;
+		vmaVkFuncs.vkDestroyBuffer						= vkDestroyBuffer;
+		vmaVkFuncs.vkDestroyImage						= vkDestroyImage;
+		vmaVkFuncs.vkFlushMappedMemoryRanges			= vkFlushMappedMemoryRanges;
+		vmaVkFuncs.vkFreeMemory							= vkFreeMemory;
+		vmaVkFuncs.vkGetBufferMemoryRequirements		= vkGetBufferMemoryRequirements;
+		vmaVkFuncs.vkGetImageMemoryRequirements			= vkGetImageMemoryRequirements;
+		vmaVkFuncs.vkGetPhysicalDeviceMemoryProperties	= vkGetPhysicalDeviceMemoryProperties;
+		vmaVkFuncs.vkGetPhysicalDeviceProperties		= vkGetPhysicalDeviceProperties;
+		vmaVkFuncs.vkInvalidateMappedMemoryRanges		= vkInvalidateMappedMemoryRanges;
+		vmaVkFuncs.vkMapMemory							= vkMapMemory;
+		vmaVkFuncs.vkUnmapMemory						= vkUnmapMemory;
+		vmaVkFuncs.vkCmdCopyBuffer						= vkCmdCopyBuffer;
+
+		VmaAllocatorCreateInfo createInfo{};
+		createInfo.physicalDevice = physicalDevice;
+		createInfo.device = logicalDevice;
+		createInfo.instance = instance;
+
+		if (canGetMemoryRequirements && hasDedicatedAllocation)
+		{
+			createInfo.flags |= VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT;
+			vmaVkFuncs.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2;
+			vmaVkFuncs.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2;
+		}
+
+		// TODO:
+		// if (IsExtensionSupported(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) && enabled)
+
+		createInfo.pVulkanFunctions = &vmaVkFuncs;
+
+		VmaAllocator allocator{ VK_NULL_HANDLE };
+		VK_CHECK(vmaCreateAllocator(&createInfo, &allocator));
+
+		return allocator;
+	}
+
+	void Device::DestroyMemoryAllocator()
+	{
+		if (memoryAllocator != VK_NULL_HANDLE)
+		{
+			vmaDestroyAllocator(memoryAllocator);
+			memoryAllocator = VK_NULL_HANDLE;
+		}
 	}
 }

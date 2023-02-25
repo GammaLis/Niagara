@@ -88,4 +88,28 @@ namespace Niagara
 			: loadOp{ load }, storeOp{ store }
 		{  }
 	};
+
+	struct DescriptorInfo
+	{
+		union
+		{
+			VkDescriptorBufferInfo bufferInfo;
+			VkDescriptorImageInfo imageInfo;
+		};
+
+		DescriptorInfo() = default;
+
+		DescriptorInfo(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize range = VK_WHOLE_SIZE)
+		{
+			bufferInfo.buffer = buffer;
+			bufferInfo.offset = offset;
+			bufferInfo.range = range;
+		}
+		DescriptorInfo(VkSampler sampler, VkImageView imageView, VkImageLayout imageLayout)
+		{
+			imageInfo.sampler = sampler;
+			imageInfo.imageView = imageView;
+			imageInfo.imageLayout = imageLayout;
+		}
+	};
 }

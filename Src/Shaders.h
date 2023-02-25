@@ -66,30 +66,6 @@ namespace Niagara
 		std::string name;
 	};
 
-	struct DescriptorInfo
-	{
-		union
-		{
-			VkDescriptorBufferInfo bufferInfo;
-			VkDescriptorImageInfo imageInfo;
-		};
-
-		DescriptorInfo() {  }
-
-		DescriptorInfo(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize range = VK_WHOLE_SIZE)
-		{
-			bufferInfo.buffer = buffer;
-			bufferInfo.offset = offset;
-			bufferInfo.range = range;
-		}
-		DescriptorInfo(VkSampler sampler, VkImageView imageView, VkImageLayout imageLayout)
-		{
-			imageInfo.sampler = sampler;
-			imageInfo.imageView = imageView;
-			imageInfo.imageLayout = imageLayout;
-		}
-	};
-
 	struct DescriptorSetInfo
 	{
 		uint32_t start = 0;
