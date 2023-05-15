@@ -17,7 +17,8 @@
 #include "Geometry.h"
 #include "VkQuery.h"
 
-#include "Metaballs.h"
+#include "RenderGraph/RenderGraphBuilder.h"
+#include "Renderers/Metaballs.h"
 
 #include <iostream>
 #include <fstream>
@@ -1050,8 +1051,8 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 		vkCmdSetViewport(cmd, 0, 1, &dynamicViewport);
 		vkCmdSetScissor(cmd, 0, 1, &viewportRect);
 
-		CommandContext::Attachment colorAttachment(&colorBuffer.views[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-		CommandContext::Attachment depthAttachment(&depthBuffer.views[0], depthAttachmentLayout);
+		CommandContext::Attachment colorAttachment(colorBuffer.views[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		CommandContext::Attachment depthAttachment(depthBuffer.views[0], depthAttachmentLayout);
 		LoadStoreInfo loadStoreInfo = pass == 0 ? LoadStoreInfo(VK_ATTACHMENT_LOAD_OP_CLEAR) : LoadStoreInfo(VK_ATTACHMENT_LOAD_OP_LOAD);
 		g_CommandContext.SetAttachments(&colorAttachment, 1, &loadStoreInfo, &clearColor, &depthAttachment, &loadStoreInfo, &clearDepth);
 
@@ -1319,7 +1320,7 @@ void RecordCommandBuffer(VkCommandBuffer cmd, const std::vector<VkFramebuffer> &
 			g_CommandContext.PipelineBarriers2(cmd);
 		}
 
-		CommandContext::Attachment attachment(&colorBuffer.views[0], newLayout);
+		CommandContext::Attachment attachment(colorBuffer.views[0], newLayout);
 		LoadStoreInfo loadStoreInfo(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
 		g_CommandContext.SetAttachments(&attachment, 1, &loadStoreInfo, nullptr);
 
@@ -1457,7 +1458,7 @@ void GetFrameResources(const Niagara::Device &device, std::vector<FrameResources
 	frameResources.resize(MAX_FRAMES_IN_FLIGHT);
 	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
-		frameResources[i].commandBuffer = g_CommandMgr.GetCommandBuffer(device);
+		frameResources[i].commandBuffer = g_CommandMgr.CreateCommandBuffer(device);
 		frameResources[i].syncObjects = GetSyncObjects(device);
 	}
 }
@@ -1621,7 +1622,7 @@ int main()
 	g_ShaderMgr.Init(device);
 
 	// Retrieving queue handles
-	VkQueue graphicsQueue = g_CommandMgr.graphicsQueue;
+	VkQueue graphicsQueue = g_CommandMgr.GraphicsQueue();
 	assert(graphicsQueue);
 
 	VkFormat colorFormat = swapchain.colorFormat;
@@ -1864,7 +1865,9 @@ int main()
 #endif
 
 	// Renderers
+#if DRAW_METABALLS
 	g_Metaballs.Init(device, colorAttachmentFormats, depthFormat);
+#endif
 
 	g_Time = 0.0;
 	// Frame time
@@ -2056,8 +2059,9 @@ int main()
 	// SPACE
 
 	// Clean up renderers
-
+#if DRAW_METABALLS
 	g_Metaballs.Destroy(device);
+#endif
 
 	// Clean up Vulkan
 

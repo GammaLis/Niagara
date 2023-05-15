@@ -106,7 +106,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_GLFW_WIN32;VK_USE_PLATFORM_WIN32_KHR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\include;..\External\volk;..\External\glfw\include;..\External\glm;..\External\SPIRV-Cross;..\External\fast_obj;..\External\meshoptimizer\src;..\External\VulkanMemoryAllocator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(VULKAN_SDK)\include;..\External;..\External\volk;..\External\glfw\include;..\External\glm;..\External\SPIRV-Cross;..\External\fast_obj;..\External\meshoptimizer\src;..\External\VulkanMemoryAllocator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -194,13 +194,14 @@
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="Geometry.cpp" />
     <ClCompile Include="Image.cpp" />
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="Metaballs.cpp" />
+    <ClCompile Include="Renderer.cpp" />
+    <ClCompile Include="Renderers\Metaballs.cpp" />
     <ClCompile Include="Pipeline.cpp" />
     <ClCompile Include="RenderPass.cpp" />
     <ClCompile Include="Shaders.cpp" />
     <ClCompile Include="SpirvReflection.cpp" />
     <ClCompile Include="Swapchain.cpp" />
+    <ClCompile Include="Triangle.cpp" />
     <ClCompile Include="Utilities.cpp" />
     <ClCompile Include="VkCommon.cpp" />
     <ClCompile Include="VkMemoryAllocator.cpp" />
@@ -221,8 +222,9 @@
     <ClInclude Include="..\External\SPIRV-Cross\spirv_parser.hpp" />
     <ClInclude Include="..\External\volk\volk.h" />
     <ClInclude Include="Buffer.h" />
-    <ClInclude Include="MarchingCubesLookup.h" />
-    <ClInclude Include="Metaballs.h" />
+    <ClInclude Include="Renderer.h" />
+    <ClInclude Include="Renderers\MarchingCubesLookup.h" />
+    <ClInclude Include="Renderers\Metaballs.h" />
     <ClInclude Include="VkQuery.h" />
     <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
       <FileType>Document</FileType>

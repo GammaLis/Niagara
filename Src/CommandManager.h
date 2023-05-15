@@ -4,6 +4,7 @@
 #include "VkCommon.h"
 #include "Shaders.h"
 #include "Pipeline.h"
+#include "Utilities.h"
 #include <queue>
 
 
@@ -11,34 +12,123 @@ namespace Niagara
 {
 	class Device;
 	class Image;
+	class Texture;
 	class ImageView;
 
-	VkCommandBuffer BeginSingleTimeCommands();
-	void EndSingleTimeCommands(VkCommandBuffer cmd);
+	enum class EQueueFamily
+	{
+		Graphics,
+		Compute,
+		Transfer,
+
+		Count
+	};
+
+	VkCommandBuffer BeginSingleTimeCommands(EQueueFamily queueFamily = EQueueFamily::Graphics);
+	void EndSingleTimeCommands(VkCommandBuffer cmd, EQueueFamily queueFamily = EQueueFamily::Graphics);
 
 	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask);
-	void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkImageAspectFlags aspectFlags);
+	void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkImageAspectFlags aspectFlags, EQueueFamily queueFamily = EQueueFamily::Graphics);
+	void InitializeTexture(const Device &device, Texture& texture, const void *pInitData, size_t size);
+
+
+	// Ref: nvpro_nvvk
+	class CommandPool
+	{
+	public:
+		CommandPool() = default;
+		NON_COPYABLE(CommandPool);
+
+		// If defaultQueue is null, uses the first queue from familyIndex as default
+		void Init(const Device& device, uint32_t familyIndex, VkCommandPoolCreateFlags flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, VkQueue defaultQueue = VK_NULL_HANDLE);
+		void Destroy();
+		
+		VkCommandBuffer CreateCommandBuffer(VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+		void Free(uint32_t count, const VkCommandBuffer* cmds);
+
+		VkCommandBuffer GetCommandBuffer(uint64_t fenceVal, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+
+		void Submit(uint32_t count, const VkCommandBuffer* cmds, VkFence fence = VK_NULL_HANDLE,
+			uint32_t waitSemaphoreCount = 0, VkSemaphore *waitSemaphores = nullptr, VkPipelineStageFlags* waitStages = nullptr,
+			uint32_t signalSemaphoreCount = 0, VkSemaphore *signalSemaphores = nullptr);
+		void SubmitAndWait(uint32_t count, const VkCommandBuffer* cmds, VkFence fence = VK_NULL_HANDLE);
+
+		operator VkCommandPool() const { return m_CommandPool; }
+		
+	private:
+		VkDevice m_Device{ VK_NULL_HANDLE };
+		VkCommandPool m_CommandPool{ VK_NULL_HANDLE };
+		VkQueue m_CommandQueue{ VK_NULL_HANDLE };
+
+		std::queue<std::pair<uint64_t, VkCommandBuffer>> m_UsedCmds;
+		std::queue<VkCommandBuffer> m_FreeCmds;
+	};
+
+	class ScopedCommandBuffer 
+	{
+	public:
+		ScopedCommandBuffer(const Device& device, CommandPool* cmdPool = nullptr);
+		ScopedCommandBuffer(const Device& device, EQueueFamily queueFamily = EQueueFamily::Graphics);
+
+		~ScopedCommandBuffer();
+
+		void Begin(VkCommandBufferUsageFlags usage = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+		void End() { vkEndCommandBuffer(cmd); }
+
+		operator VkCommandBuffer() const { return cmd; }
+
+	private:
+		VkCommandBuffer cmd{ VK_NULL_HANDLE };
+		CommandPool* pCmdPool{ nullptr };
+	};
+
+	class ScopedRendering
+	{
+	public:
+		ScopedRendering(VkCommandBuffer cmd, const VkRect2D &renderArea, 
+			const std::vector<std::pair<Image*, LoadStoreInfo>>& colorAttachments, const std::pair<Image*, LoadStoreInfo>& depthAttachments = {nullptr, LoadStoreInfo()}, bool beginCmd = false);
+		~ScopedRendering();
+
+		NON_COPYABLE(ScopedRendering);
+
+		void Begin();
+		void End();
+
+	private:
+		VkCommandBuffer m_Cmd{ VK_NULL_HANDLE };
+		VkRect2D m_RenderArea;
+		bool m_bBeginCmd{ false };
+	};
+
 
 	class CommandManager
 	{
 	public:
-		static VkCommandBuffer CreateCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+		static constexpr uint32_t s_QueueCount = (uint32_t)EQueueFamily::Count;
 
 		void Init(const Device& device);
 		void Cleanup(const Device& device);
 
-		VkCommandBuffer GetCommandBuffer(const Device& device);
+		VkCommandBuffer CreateCommandBuffer(const Device& device, EQueueFamily queueType = EQueueFamily::Graphics, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+		VkCommandBuffer GetCommandBuffer(const Device &device, uint64_t fenceVal, EQueueFamily queueType = EQueueFamily::Graphics, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
-		VkQueue graphicsQueue;
-		VkQueue computeQueue;
-		VkQueue transferQueue;
+		VkQueue GraphicsQueue() const { return m_CommandQueues[(int32_t)EQueueFamily::Graphics]; }
+		VkQueue ComputeQueue () const { return m_CommandQueues[(int32_t)EQueueFamily::Compute ]; }
+		VkQueue TransferQueue() const { return m_CommandQueues[(int32_t)EQueueFamily::Transfer]; }
 
-		VkCommandPool commandPool;
+		VkQueue GetCommandQueue(EQueueFamily queueFamily) const { return m_CommandQueues[(uint32_t)queueFamily]; }
+
+		CommandPool& GetCommandPool(EQueueFamily queueFamily = EQueueFamily::Graphics, uint32_t index = 0) 
+		{
+			return m_CommandPools[(uint32_t)queueFamily];
+		}
 
 	private:
 		std::queue<VkCommandBuffer> m_CommandBuffers;
-	};
 
+		VkQueue m_CommandQueues[s_QueueCount];
+		CommandPool m_CommandPools[s_QueueCount];
+	};
 	extern CommandManager g_CommandMgr;
 
 
@@ -50,14 +140,14 @@ namespace Niagara
 
 		struct Attachment
 		{
-			const ImageView* view{ nullptr };
+			VkImageView view{ VK_NULL_HANDLE };
 			VkImageLayout layout{ VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL };
 
 			Attachment() = default;
-
-			Attachment(const ImageView *inView, VkImageLayout inLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL) 
+			Attachment(VkImageView inView, VkImageLayout inLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL) 
 				: view{inView}, layout {inLayout}
 			{  }
+			explicit Attachment(const Image& image);
 		};
 
 	private:
@@ -102,6 +192,12 @@ namespace Niagara
 		void UpdateDescriptorSetInfo(const Pipeline& pipeline);
 
 	public:
+		void Invalidate() 
+		{
+			cachedPipeline = nullptr;
+			cachedCommandBuffer = VK_NULL_HANDLE;
+		}
+
 		void BeginCommandBuffer(VkCommandBuffer cmd, VkCommandBufferUsageFlags usage = 0);
 
 		void EndCommandBuffer(VkCommandBuffer cmd)
@@ -114,6 +210,7 @@ namespace Niagara
 		// Dynamic rendering
 		void SetAttachments(Attachment* pColorAttachments, uint32_t colorAttachmentCount, LoadStoreInfo* pColorLoadStoreInfos, VkClearColorValue *pClearColorValues = nullptr,
 			Attachment* pDepthAttachment = nullptr, LoadStoreInfo* pDepthLoadStoreInfo = nullptr, VkClearDepthStencilValue *pClearDepthValue = nullptr);
+		void SetAttachments(const std::vector<std::pair<Image*, LoadStoreInfo>> &colorAttachments, const std::pair<Image*, LoadStoreInfo> &depthAttachment);
 
 		void BeginRendering(VkCommandBuffer cmd, const VkRect2D& renderArea);
 
@@ -158,6 +255,7 @@ namespace Niagara
 			descriptor.descriptorCount = 1;
 			descriptor.descriptorType = descriptorSetInfos[set].types[binding];
 			descriptor.pBufferInfo = &info.bufferInfo;
+			descriptor.pImageInfo = &info.imageInfo;
 		}
 
 		std::vector<DescriptorInfo> GetDescriptorInfos(uint32_t set = 0) const;
@@ -202,6 +300,10 @@ namespace Niagara
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
+		void ImageBarrier2(Image &image, VkImageLayout newLayout,
+			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
+			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
+
 		void BufferBarrier2(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
@@ -213,6 +315,5 @@ namespace Niagara
 		void Blit(VkCommandBuffer cmd, VkImage srcImage, VkImage dstImage, VkRect2D srcRegion, VkRect2D dstRegion, uint32_t srcMipLevel = 0, uint32_t dstMipLevel = 0);
 
 	};
-
 	extern CommandContext g_CommandContext;
 }

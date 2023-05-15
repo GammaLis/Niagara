@@ -28,14 +28,14 @@
     <Filter Include="spirv-cross">
       <UniqueIdentifier>{0171d7b6-935c-4c33-8e88-8c8f081e542e}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Metaball">
+    <Filter Include="Renderers">
       <UniqueIdentifier>{c679bcfb-bb73-416c-8f4c-cce8e6314084}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="RenderGraph">
+      <UniqueIdentifier>{9c5dd642-ee67-4a10-b9da-33f6f41b64de}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="..\External\glfw\src\glx_context.c">
       <Filter>glfw</Filter>
     </ClCompile>
@@ -210,10 +210,16 @@
     <ClCompile Include="Buffer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="Metaballs.cpp">
-      <Filter>Metaball</Filter>
+    <ClCompile Include="Renderers\Metaballs.cpp">
+      <Filter>Renderers</Filter>
     </ClCompile>
     <ClCompile Include="VkMemoryAllocator.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Renderer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Triangle.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
@@ -305,13 +311,16 @@
     <ClInclude Include="VkQuery.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="Metaballs.h">
-      <Filter>Metaball</Filter>
+    <ClInclude Include="Renderers\Metaballs.h">
+      <Filter>Renderers</Filter>
     </ClInclude>
-    <ClInclude Include="MarchingCubesLookup.h">
-      <Filter>Metaball</Filter>
+    <ClInclude Include="Renderers\MarchingCubesLookup.h">
+      <Filter>Renderers</Filter>
     </ClInclude>
     <ClInclude Include="Buffer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Renderer.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

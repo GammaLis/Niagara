@@ -12,6 +12,13 @@
 
 namespace Niagara
 {
+
+#define NON_COPYABLE(T) \
+	T(const T&) = delete; T& operator=(const T&) = delete
+
+#define NON_MOVABLE(T) \
+	T(T&&) = delete; T& operator=(T&&) = delete
+
 	/// Files
 
 	std::vector<char> ReadFile(const std::string& fileName);
@@ -94,6 +101,13 @@ namespace Niagara
 	inline uint32_t DivideAndRoundDown(uint32_t dividend, uint32_t divisor)
 	{
 		return dividend / divisor;
+	}
+
+	inline uint32_t GetMipLevels(uint32_t width, uint32_t height)
+	{
+		uint32_t highBit;
+		_BitScanReverse((unsigned long*)&highBit, width | height);
+		return highBit + 1;
 	}
 
 	inline glm::vec3 SafeNormalize(const glm::vec3 &v)

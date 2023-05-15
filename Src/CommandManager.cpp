@@ -1,6 +1,7 @@
 #include "CommandManager.h"
 #include "Device.h"
 #include "Image.h"
+#include "Renderer.h"
 
 namespace Niagara
 {
@@ -10,18 +11,16 @@ namespace Niagara
 	CommandContext g_CommandContext{};
 
 
-	// global functions
+	// Global functions
 
-	VkCommandBuffer BeginSingleTimeCommands()
+	VkCommandBuffer BeginSingleTimeCommands(EQueueFamily queueFamily)
 	{
-		VkCommandBuffer cmd = g_CommandMgr.CreateCommandBuffer(*g_Device, g_CommandMgr.commandPool);
-		
+		VkCommandBuffer cmd = g_CommandMgr.CreateCommandBuffer(*g_Device, queueFamily);		
 		g_CommandContext.BeginCommandBuffer(cmd, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-
 		return cmd;
 	}
 
-	void EndSingleTimeCommands(VkCommandBuffer cmd)
+	void EndSingleTimeCommands(VkCommandBuffer cmd, EQueueFamily queueFamily)
 	{
 		g_CommandContext.EndCommandBuffer(cmd);
 
@@ -30,10 +29,11 @@ namespace Niagara
 		submitInfo.pCommandBuffers = &cmd;
 		submitInfo.commandBufferCount = 1;
 
-		vkQueueSubmit(g_CommandMgr.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle(g_CommandMgr.graphicsQueue);
+		VkQueue queue = g_CommandMgr.GetCommandQueue(queueFamily);
+		vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(queue);
 
-		vkFreeCommandBuffers(*g_Device, g_CommandMgr.commandPool, 1, &cmd);
+		vkFreeCommandBuffers(*g_Device, g_CommandMgr.GetCommandPool(queueFamily), 1, &cmd);
 	}
 
 	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags,
@@ -68,9 +68,9 @@ namespace Niagara
 		EndSingleTimeCommands(cmd);
 	}
 
-	void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkImageAspectFlags aspectFlags)
+	void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkImageAspectFlags aspectFlags, EQueueFamily queueFamily)
 	{
-		auto cmd = BeginSingleTimeCommands();
+		auto cmd = BeginSingleTimeCommands(queueFamily);
 
 		VkBufferImageCopy region{};
 		region.bufferOffset = 0;
@@ -88,48 +88,276 @@ namespace Niagara
 
 		vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-		EndSingleTimeCommands(cmd);
+		EndSingleTimeCommands(cmd, queueFamily);
+	}
+
+	void InitializeTexture(const Device &device, Texture& texture, const void *pInitData, size_t size)
+	{
+		Buffer stagingBuffer;
+		stagingBuffer.Init(device, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST, 
+			VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, pInitData, size);
+
+		VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		{
+			ScopedCommandBuffer cmd(device, EQueueFamily::Transfer);
+
+			VkImageLayout dstLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			// Transition
+			{
+				g_CommandContext.ImageBarrier2(texture.image, VkImageSubresourceRange{aspectMask, 0, 1, 0, 1} ,
+					VK_IMAGE_LAYOUT_UNDEFINED, dstLayout,
+					VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+					VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+				g_CommandContext.PipelineBarriers2(cmd);
+			}
+
+			// Copy
+			{
+				VkBufferImageCopy region{};
+				region.bufferOffset = 0;
+				// The `bufferRowLength` and `bufferImageHeight` fields specify how the pixels are laid out in memory. For example,
+				// you could have some padding bytes between rows of the image. Specifying `0` for both indicates that the pixels 
+				// are simply tightly packed.
+				region.bufferRowLength = 0;
+				region.bufferImageHeight = 0;
+				region.imageSubresource.aspectMask = aspectMask;
+				region.imageSubresource.mipLevel = 0;
+				region.imageSubresource.baseArrayLayer = 0;
+				region.imageSubresource.layerCount = 1;
+				region.imageOffset = { 0 ,0, 0 };
+				region.imageExtent = texture.extent;
+
+				vkCmdCopyBufferToImage(cmd, stagingBuffer, texture.image, dstLayout, 1, &region);
+			}
+
+			// Transition
+			{
+				g_CommandContext.ImageBarrier2(texture.image, VkImageSubresourceRange{ aspectMask, 0, 1, 0, 1 },
+					dstLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+					VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+					VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+				g_CommandContext.PipelineBarriers2(cmd);
+			}
+		}
+
+		stagingBuffer.Destroy(device);
+	}
+
+	
+	/// CommandPool
+
+	void CommandPool::Init(const Device& device, uint32_t familyIndex, VkCommandPoolCreateFlags flags, VkQueue queue)
+	{
+		m_Device = device;
+
+		VkCommandPoolCreateInfo createInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+		createInfo.queueFamilyIndex = familyIndex;
+		createInfo.flags = flags;
+		vkCreateCommandPool(device, &createInfo, nullptr, &m_CommandPool);
+		
+		if (queue)
+			m_CommandQueue = queue;
+		else
+			vkGetDeviceQueue(device, familyIndex, 0, &m_CommandQueue);
+	}
+
+	void CommandPool::Destroy()
+	{
+		if (m_CommandPool)
+		{
+			vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);
+			m_CommandPool = VK_NULL_HANDLE;
+		}
+
+		m_Device = VK_NULL_HANDLE;
+	}
+
+	VkCommandBuffer CommandPool::CreateCommandBuffer(VkCommandBufferLevel level)
+	{
+		VkCommandBufferAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+		allocInfo.commandBufferCount = 1;
+		allocInfo.commandPool = m_CommandPool;
+		allocInfo.level = level;
+
+		VkCommandBuffer cmd;
+		vkAllocateCommandBuffers(m_Device, &allocInfo, &cmd);
+
+		return cmd;
+	}
+
+	void CommandPool::Free(uint32_t count, const VkCommandBuffer* cmds)
+	{
+		vkFreeCommandBuffers(m_Device, m_CommandPool, count, cmds);
+	}
+
+	VkCommandBuffer CommandPool::GetCommandBuffer(uint64_t fenceVal, VkCommandBufferLevel level)
+	{
+		if (!m_UsedCmds.empty())
+		{
+			auto frontPair = m_UsedCmds.front();
+			while (!m_UsedCmds.empty() && frontPair.first + Renderer::MAX_FRAMES_IN_FLIGHT <= fenceVal)
+			{
+				m_UsedCmds.pop();
+				// vkResetCommandBuffer(frontPair.second, 0);
+				m_FreeCmds.push(frontPair.second);
+				
+				frontPair = m_UsedCmds.front();
+			}
+		}
+
+		VkCommandBuffer cmd{ VK_NULL_HANDLE };
+		if (!m_FreeCmds.empty())
+		{
+			cmd = m_FreeCmds.front();
+			m_FreeCmds.pop();
+		}
+		else
+		{
+			cmd = CreateCommandBuffer(level);
+		}
+		vkResetCommandBuffer(cmd, 0);
+		m_UsedCmds.push({ fenceVal, cmd });
+
+		return cmd;
+	}
+
+	void CommandPool::Submit(uint32_t count, const VkCommandBuffer* cmds, VkFence fence, 
+		uint32_t waitSemaphoreCount, VkSemaphore* waitSemaphores, VkPipelineStageFlags *waitStages,
+		uint32_t signalSemaphoreCount, VkSemaphore* signalSemaphores)
+	{
+		VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		submitInfo.commandBufferCount = count;
+		submitInfo.pCommandBuffers = cmds;
+		if (waitSemaphoreCount > 0 && waitSemaphores)
+		{
+			submitInfo.waitSemaphoreCount = waitSemaphoreCount;
+			submitInfo.pWaitSemaphores = waitSemaphores;
+			submitInfo.pWaitDstStageMask = waitStages;
+		}
+		if (signalSemaphoreCount > 0 && signalSemaphores)
+		{
+			submitInfo.signalSemaphoreCount = signalSemaphoreCount;
+			submitInfo.pSignalSemaphores = signalSemaphores;
+		}
+		vkQueueSubmit(m_CommandQueue, 1, &submitInfo, fence);
+	}
+
+	void CommandPool::SubmitAndWait(uint32_t count, const VkCommandBuffer* cmds, VkFence fence)
+	{
+		Submit(count, cmds, fence);
+		VK_CHECK(vkQueueWaitIdle(m_CommandQueue));
+		vkFreeCommandBuffers(m_Device, m_CommandPool, (uint32_t)count, cmds);
+	}
+
+
+	/// ScopedCommandBuffer
+	
+	ScopedCommandBuffer::ScopedCommandBuffer(const Device& device, CommandPool* cmdPool) : pCmdPool{ cmdPool }
+	{
+		if (!cmdPool)
+			pCmdPool = &g_CommandMgr.GetCommandPool();
+
+		cmd = cmdPool->CreateCommandBuffer();
+		Begin();
+	}
+	
+	ScopedCommandBuffer::ScopedCommandBuffer(const Device& device, EQueueFamily queueFamily)
+		: ScopedCommandBuffer(device, &g_CommandMgr.GetCommandPool(queueFamily))
+	{
+	}
+
+	ScopedCommandBuffer::~ScopedCommandBuffer()
+	{
+		End();
+		pCmdPool->SubmitAndWait(1, &cmd, nullptr);
+	}
+
+	void ScopedCommandBuffer::Begin(VkCommandBufferUsageFlags usage)
+	{
+		VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+		beginInfo.flags = usage;
+		beginInfo.pInheritanceInfo = nullptr;
+
+		VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+	}
+
+
+	/// ScopedRendering
+
+	ScopedRendering::ScopedRendering(VkCommandBuffer cmd, const VkRect2D& renderArea,
+		const std::vector<std::pair<Image*, LoadStoreInfo>>& colorAttachments, const std::pair<Image*, LoadStoreInfo> &depthAttachment, bool beginCmd)
+		: m_Cmd{ cmd }, m_RenderArea{ renderArea }, m_bBeginCmd{ beginCmd }
+	{
+		g_CommandContext.SetAttachments(colorAttachments, depthAttachment);
+		Begin();
+	}
+
+	ScopedRendering::~ScopedRendering() 
+	{
+		End();
+	}
+
+	void ScopedRendering::Begin()
+	{
+		if (m_bBeginCmd)
+			g_CommandContext.BeginCommandBuffer(m_Cmd);
+
+		g_CommandContext.BeginRendering(m_Cmd, m_RenderArea);
+	}
+
+	void ScopedRendering::End() 
+	{
+		g_CommandContext.EndRendering(m_Cmd);
+
+		if (m_bBeginCmd)
+			g_CommandContext.EndCommandBuffer(m_Cmd);
 	}
 
 
 	/// CommandManager
 
-	VkCommandBuffer CommandManager::CreateCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBufferLevel level)
-	{
-		VkCommandBufferAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		allocInfo.commandPool = commandPool;
-		allocInfo.level = level;
-		allocInfo.commandBufferCount = 1;
-
-		VkCommandBuffer commandBuffer;
-		VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer));
-
-		return commandBuffer;
-	}
-
 	void CommandManager::Init(const Device& device)
 	{
-		commandPool = device.CreateCommandPool(device.queueFamilyIndices.graphics);
+		uint32_t graphicsIndex = (uint32_t)EQueueFamily::Graphics;
+		uint32_t computeIndex  = (uint32_t)EQueueFamily::Compute;
+		uint32_t transferIndex = (uint32_t)EQueueFamily::Transfer;
 
-		vkGetDeviceQueue(device, device.queueFamilyIndices.graphics, 0, &graphicsQueue);
-		vkGetDeviceQueue(device, device.queueFamilyIndices.compute, 0, &computeQueue);
-		vkGetDeviceQueue(device, device.queueFamilyIndices.transfer, 0, &transferQueue);
+		vkGetDeviceQueue(device, device.queueFamilyIndices.graphics, 0, &m_CommandQueues[graphicsIndex]);
+		vkGetDeviceQueue(device, device.queueFamilyIndices.compute , 0, &m_CommandQueues[computeIndex ]);
+		vkGetDeviceQueue(device, device.queueFamilyIndices.transfer, 0, &m_CommandQueues[transferIndex]);
+
+		VkCommandPoolCreateFlags poolFlags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		m_CommandPools[graphicsIndex].Init(device, device.queueFamilyIndices.graphics, poolFlags, m_CommandQueues[graphicsIndex]);
+		m_CommandPools[computeIndex ].Init(device, device.queueFamilyIndices.compute , poolFlags, m_CommandQueues[computeIndex ]);
+		m_CommandPools[transferIndex].Init(device, device.queueFamilyIndices.transfer, poolFlags, m_CommandQueues[transferIndex]);		
 	}
 
 	void CommandManager::Cleanup(const Device& device)
 	{
-		vkDestroyCommandPool(device, commandPool, nullptr);
+		for (uint32_t i = 0, imax = (uint32_t)EQueueFamily::Count; i < imax; ++i)
+			m_CommandPools[i].Destroy();
 	}
 
-	VkCommandBuffer CommandManager::GetCommandBuffer(const Device& device)
+	VkCommandBuffer CommandManager::CreateCommandBuffer(const Device& device, EQueueFamily queueFamily, VkCommandBufferLevel level)
 	{
-		VkCommandBuffer cmd = CreateCommandBuffer(device, commandPool);
+		auto& pool = GetCommandPool(queueFamily);
+		VkCommandBuffer cmd = pool.CreateCommandBuffer(level);
+		return cmd;
+	}
+
+	VkCommandBuffer CommandManager::GetCommandBuffer(const Device& device, uint64_t fenceVal, EQueueFamily queueFamily, VkCommandBufferLevel level)
+	{
+		auto& pool = GetCommandPool(queueFamily);
+		VkCommandBuffer cmd = pool.GetCommandBuffer(fenceVal, level);
 		return cmd;
 	}
 
 
 	/// CommandContext
+
+	CommandContext::Attachment::Attachment(const Image& image) : view{image.views[0]}, layout{image.layout}
+	{
+	}
 
 	void CommandContext::UpdateDescriptorSetInfo(const Pipeline& pipeline)
 	{
@@ -190,6 +418,40 @@ namespace Niagara
 		cachedDepthResolve.view = nullptr;
 	}
 
+	void CommandContext::SetAttachments(const std::vector<std::pair<Image*, LoadStoreInfo>>& colorAttachments, const std::pair<Image*, LoadStoreInfo>& depthAttachment)
+	{
+		uint32_t colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
+
+		assert(colorAttachmentCount < s_MaxAttachments);
+
+		activeColorAttachmentCount = colorAttachmentCount;
+
+		for (uint32_t i = 0; i < colorAttachmentCount; ++i)
+		{
+			cachedColorAttachments[i].view = colorAttachments[i].first->views[0];
+			cachedColorAttachments[i].layout = colorAttachments[i].first->layout;
+
+			cachedColorLoadStoreInfos[i] = colorAttachments[i].second;
+			cachedColorClearValues[i] = colorAttachments[i].first->clearValue;
+		}
+
+		if (depthAttachment.first != nullptr)
+		{
+			cachedDepthAttachment.view = depthAttachment.first->views[0];
+			cachedDepthAttachment.layout = depthAttachment.first->layout;
+
+			cachedDepthLoadStoreInfo = depthAttachment.second;
+			cachedDepthClearValue.depthStencil = depthAttachment.first->clearValue.depthStencil;
+		}
+		else
+		{
+			cachedDepthAttachment.view = VK_NULL_HANDLE;
+		}
+
+		// TODO:
+		cachedDepthResolve.view = nullptr;
+	}
+
 	void CommandContext::BeginRendering(VkCommandBuffer cmd, const VkRect2D& renderArea)
 	{
 		// Colors
@@ -204,7 +466,7 @@ namespace Niagara
 				auto& attachmentInfo = colorAttachmentInfos[i];
 
 				attachmentInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-				attachmentInfo.imageView = cachedColorAttachments[i].view->view;
+				attachmentInfo.imageView = cachedColorAttachments[i].view;
 				attachmentInfo.imageLayout = cachedColorAttachments[i].layout;
 				attachmentInfo.loadOp = cachedColorLoadStoreInfos[i].loadOp;
 				attachmentInfo.storeOp = cachedColorLoadStoreInfos[i].storeOp;
@@ -213,7 +475,7 @@ namespace Niagara
 				if (activeColorResolveCount > 0)
 				{
 					attachmentInfo.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
-					attachmentInfo.resolveImageView = cachedColorResolves[i].view->view;
+					attachmentInfo.resolveImageView = cachedColorResolves[i].view;
 					attachmentInfo.resolveImageLayout = cachedColorResolves[i].layout;
 				}
 			}
@@ -227,7 +489,7 @@ namespace Niagara
 
 		if (cachedDepthAttachment.view != nullptr)
 		{
-			depthAttachmentInfo.imageView = cachedDepthAttachment.view->view;
+			depthAttachmentInfo.imageView = cachedDepthAttachment.view;
 			depthAttachmentInfo.imageLayout = cachedDepthAttachment.layout;
 			depthAttachmentInfo.loadOp = cachedDepthLoadStoreInfo.loadOp;
 			depthAttachmentInfo.storeOp = cachedDepthLoadStoreInfo.storeOp;
@@ -236,7 +498,7 @@ namespace Niagara
 			if (cachedDepthResolve.view != nullptr)
 			{
 				depthAttachmentInfo.resolveMode = VK_RESOLVE_MODE_MAX_BIT;
-				depthAttachmentInfo.resolveImageView = cachedDepthResolve.view->view;
+				depthAttachmentInfo.resolveImageView = cachedDepthResolve.view;
 				depthAttachmentInfo.resolveImageLayout = cachedDepthResolve.layout;
 			}
 		}
@@ -348,6 +610,7 @@ namespace Niagara
 				descriptorSet.descriptorCount = 1;
 				descriptorSet.descriptorType = descriptorSetInfos[set].types[i];
 				descriptorSet.pBufferInfo = &(cachedDescriptorInfos[set][i].bufferInfo);
+				descriptorSet.pImageInfo = &(cachedDescriptorInfos[set][i].imageInfo);
 
 				descriptorSets.push_back(descriptorSet);
 			}
@@ -462,6 +725,24 @@ namespace Niagara
 		barrier2.subresourceRange = subresourceRange;
 		barrier2.oldLayout = oldLayout;
 		barrier2.newLayout = newLayout;
+		barrier2.srcAccessMask = srcAccessMask;
+		barrier2.dstAccessMask = dstAccessMask;
+		barrier2.srcStageMask = srcStageMask;
+		barrier2.dstStageMask = dstStageMask;
+		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::ImageBarrier2(Image &image, VkImageLayout newLayout, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+	{
+		assert(activeImageMemoryBarriers2 < s_MaxBarrierNum);
+
+		auto& barrier2 = cachedImageMemoryBarriers2[activeImageMemoryBarriers2++];
+		barrier2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		barrier2.image = image;
+		barrier2.subresourceRange = image.views[0].subresourceRange;
+		barrier2.oldLayout = image.layout;
+		barrier2.newLayout = image.layout = newLayout;
 		barrier2.srcAccessMask = srcAccessMask;
 		barrier2.dstAccessMask = dstAccessMask;
 		barrier2.srcStageMask = srcStageMask;

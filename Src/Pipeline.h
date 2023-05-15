@@ -22,7 +22,7 @@ namespace Niagara
 
 	struct InputAssemblyState : VkPipelineInputAssemblyStateCreateInfo
 	{
-		explicit InputAssemblyState(VkPrimitiveTopology inTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) : VkPipelineInputAssemblyStateCreateInfo{}
+		InputAssemblyState(VkPrimitiveTopology inTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) : VkPipelineInputAssemblyStateCreateInfo{}
 		{
 			sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
 			topology = inTopology;
@@ -41,7 +41,7 @@ namespace Niagara
 
 	struct RasterizationState : VkPipelineRasterizationStateCreateInfo
 	{
-		explicit RasterizationState(VkPolygonMode inPolygonMode = VK_POLYGON_MODE_FILL, VkCullModeFlagBits inCullMode = VK_CULL_MODE_BACK_BIT, VkFrontFace inFrontFace = VK_FRONT_FACE_CLOCKWISE, float inLineWidth = 1.0f)
+		RasterizationState(VkPolygonMode inPolygonMode = VK_POLYGON_MODE_FILL, VkCullModeFlagBits inCullMode = VK_CULL_MODE_BACK_BIT, VkFrontFace inFrontFace = VK_FRONT_FACE_CLOCKWISE, float inLineWidth = 1.0f)
 			: VkPipelineRasterizationStateCreateInfo{}
 		{
 			sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -65,10 +65,10 @@ namespace Niagara
 
 	struct DepthStencilState : VkPipelineDepthStencilStateCreateInfo
 	{
-		explicit DepthStencilState(VkBool32 inEenableDepthTest = VK_FALSE, VkBool32 inDepthWriteEnable = VK_FALSE, VkCompareOp inDepthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL) : VkPipelineDepthStencilStateCreateInfo{}
+		DepthStencilState(VkBool32 inDepthTestEnable = VK_FALSE, VkBool32 inDepthWriteEnable = VK_FALSE, VkCompareOp inDepthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL) : VkPipelineDepthStencilStateCreateInfo{}
 		{
 			sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-			depthTestEnable = inEenableDepthTest;
+			depthTestEnable = inDepthTestEnable;
 			depthWriteEnable = inDepthWriteEnable;
 			depthCompareOp = inDepthCompareOp;
 		}
@@ -77,7 +77,7 @@ namespace Niagara
 
 	struct ColorBlendAttachmentState : VkPipelineColorBlendAttachmentState
 	{
-		explicit ColorBlendAttachmentState(VkBool32 inBlendEnable = VK_FALSE, VkColorComponentFlags inColorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+		ColorBlendAttachmentState(VkBool32 inBlendEnable = VK_FALSE, VkColorComponentFlags inColorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
 			: VkPipelineColorBlendAttachmentState{}
 		{
 			blendEnable = inBlendEnable;
@@ -94,7 +94,7 @@ namespace Niagara
 
 	struct ColorBlendState : VkPipelineColorBlendStateCreateInfo
 	{
-		explicit ColorBlendState(const VkPipelineColorBlendAttachmentState *attachments = nullptr, uint32_t size = 0) : VkPipelineColorBlendStateCreateInfo{}
+		ColorBlendState(const VkPipelineColorBlendAttachmentState *attachments = nullptr, uint32_t size = 0) : VkPipelineColorBlendStateCreateInfo{}
 		{
 			sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
 			logicOp = VK_LOGIC_OP_COPY;

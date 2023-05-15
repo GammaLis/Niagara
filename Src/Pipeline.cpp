@@ -485,7 +485,7 @@ namespace Niagara
 		createInfo.pVertexInputState = &pipelineState.vertexInputState; // <--
 		createInfo.pInputAssemblyState = &pipelineState.inputAssemblyState;
 		createInfo.pViewportState = &pipelineState.viewportState; // <--
-		createInfo.pRasterizationState = &pipelineState.rasterizationState;
+		createInfo.pRasterizationState = &pipelineState.rasterizationState; // <--
 		createInfo.pMultisampleState = &pipelineState.multisampleState;
 		createInfo.pDepthStencilState = &pipelineState.depthStencilState; // <--
 		createInfo.pColorBlendState = &pipelineState.colorBlendState; // <--
