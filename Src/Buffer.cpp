@@ -1,6 +1,7 @@
 #include "Buffer.h"
 #include "Device.h"
 #include "CommandManager.h"
+#include "Renderer.h"
 
 
 namespace Niagara
@@ -82,6 +83,9 @@ namespace Niagara
 
 		if (pInitData != nullptr)
 			Update(pInitData, initSize);
+
+		if (name != "")
+			g_AccessMgr.AddResourceAccess(name);
 	}
 
 	void Buffer::Destroy(const Device& device)

@@ -6,6 +6,7 @@
 #include "VkQuery.h"
 
 #include "Renderer.h"
+#include "RenderGraph/RenderGraphBuilder.h"
 
 #include <iostream>
 #include <fstream>

@@ -197,6 +197,7 @@
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="Renderers\Metaballs.cpp" />
     <ClCompile Include="Pipeline.cpp" />
+    <ClCompile Include="RenderGraph\RenderGraphBuilder.cpp" />
     <ClCompile Include="RenderPass.cpp" />
     <ClCompile Include="Shaders.cpp" />
     <ClCompile Include="SpirvReflection.cpp" />
@@ -225,6 +226,7 @@
     <ClInclude Include="Renderer.h" />
     <ClInclude Include="Renderers\MarchingCubesLookup.h" />
     <ClInclude Include="Renderers\Metaballs.h" />
+    <ClInclude Include="RenderGraph\RenderGraphBuilder.h" />
     <ClInclude Include="VkQuery.h" />
     <CustomBuild Include="..\Shaders\DrawCommand.comp.glsl">
       <FileType>Document</FileType>

@@ -19,6 +19,31 @@ namespace Niagara
 			IsDepthOnlyFormat(format);
 	}
 
+	inline VkImageAspectFlags FormatToAspectMask(VkFormat format)
+	{
+		switch (format)
+		{
+		case VK_FORMAT_UNDEFINED:
+			return 0;
+
+		case VK_FORMAT_S8_UINT:
+			return VK_IMAGE_ASPECT_STENCIL_BIT;
+
+		case VK_FORMAT_D16_UNORM_S8_UINT:
+		case VK_FORMAT_D24_UNORM_S8_UINT:
+		case VK_FORMAT_D32_SFLOAT_S8_UINT:
+			return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+
+		case VK_FORMAT_D16_UNORM:
+		case VK_FORMAT_D32_SFLOAT:
+		case VK_FORMAT_X8_D24_UNORM_PACK32:
+			return VK_IMAGE_ASPECT_DEPTH_BIT;
+
+		default:
+			return VK_IMAGE_ASPECT_COLOR_BIT;
+		}
+	}
+
 	// Determine if a Vulkan descriptor type is a dynamic storage buffer or dynamic uniform buffer.
 	inline bool IsDynamicBufferDescriptorType(VkDescriptorType descriptorType)
 	{
@@ -84,7 +109,7 @@ namespace Niagara
 		VkAttachmentLoadOp loadOp{ VK_ATTACHMENT_LOAD_OP_CLEAR };
 		VkAttachmentStoreOp storeOp{ VK_ATTACHMENT_STORE_OP_STORE };
 
-		explicit LoadStoreInfo(VkAttachmentLoadOp load = VK_ATTACHMENT_LOAD_OP_CLEAR, VkAttachmentStoreOp store = VK_ATTACHMENT_STORE_OP_STORE)
+		LoadStoreInfo(VkAttachmentLoadOp load = VK_ATTACHMENT_LOAD_OP_CLEAR, VkAttachmentStoreOp store = VK_ATTACHMENT_STORE_OP_STORE)
 			: loadOp{ load }, storeOp{ store }
 		{  }
 	};

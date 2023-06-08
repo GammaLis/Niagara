@@ -9,6 +9,8 @@
 #include "Pipeline.h"
 #include "CommandManager.h"
 
+#include <unordered_map>
+
 
 namespace Niagara
 {
@@ -38,7 +40,10 @@ namespace Niagara
 		ColorBlendAttachmentState attachmentPreMultiplied;
 		ColorBlendAttachmentState attachmentBlendAdditive;
 
-		DynamicState ds;
+		// Load store actions
+		LoadStoreInfo loadStoreDefault;
+		LoadStoreInfo lClearSStore;
+		LoadStoreInfo lDontCareSStore;
 
 		// Samplers
 		Sampler linearClampSampler;
@@ -57,18 +62,66 @@ namespace Niagara
 	struct BufferManager
 	{
 		// Uniform buffers
-		Buffer viewUniformBuffer;
+		Buffer viewUniformBuffer{"ViewUniformBuffer"};
 
 		// View dependent textures
-		Image colorBuffer;
-		Image depthBuffer;
+		Image colorBuffer{"ColorBuffer"};
+		Image depthBuffer{"DepthBuffer"};
 
 		void InitViewDependentBuffers(const Renderer& renderer);
 		void Cleanup(const Device& device);
 	};
 	extern BufferManager g_BufferMgr;
 
+	struct AccessDetail 
+	{
+		AccessDetail(VkPipelineStageFlags2 inStageMask = VK_PIPELINE_STAGE_2_NONE, VkAccessFlags2 inAccessMask = VK_ACCESS_2_NONE, VkImageLayout inLayout = VK_IMAGE_LAYOUT_UNDEFINED);
 
+		void Reset() 
+		{
+			pipelineStage = VK_PIPELINE_STAGE_2_NONE;
+			access = VK_ACCESS_NONE;
+			layout = VK_IMAGE_LAYOUT_UNDEFINED;
+		}
+
+		bool NearlyEqual(const AccessDetail& other) const
+		{
+			return (layout == other.layout) && (pipelineStage & other.pipelineStage) != 0 && (access & other.access) != 0;
+		}
+
+		bool Equal(const AccessDetail& other) const 
+		{
+			return (layout == other.layout) && (pipelineStage == other.pipelineStage) && (access == other.access);
+		}
+
+		VkPipelineStageFlags2 pipelineStage;
+		VkAccessFlags2 access;
+		VkImageLayout layout;
+	};
+
+	struct AccessManager
+	{
+	public:
+		void AddResourceAccess(const std::string& name);
+		void RemoveResourceAccess(const std::string& name);
+
+		void Invalidate();
+		void UpdateAccess(const std::string& name, const AccessDetail& access, bool bImmediate = false);
+		void Flush();
+		bool GetAccessDetail(const std::string& name, AccessDetail &access);
+		AccessDetail GetAccessDetail(const std::string& name);
+
+	private:
+		std::unordered_map<std::string, AccessDetail> m_ResourceAccesses;
+
+		static constexpr uint32_t s_MaxPoolSize = 16;
+		mutable std::pair<std::string, AccessDetail> m_Pool[s_MaxPoolSize];
+		mutable uint32_t m_PoolCount{ 0 };
+	};
+	extern AccessManager g_AccessMgr;
+
+
+	class RGBuilder;
 	class Renderer
 	{
 		friend BufferManager;
@@ -183,6 +236,8 @@ namespace Niagara
 		virtual void OnRender();
 		virtual void OnResize();
 
+		void RegisterExternalResources();
+
 		std::vector<VkCommandBuffer> m_ActiveCmds;
 
 		uint64_t m_FrameIndex{ 0 };
@@ -192,9 +247,12 @@ namespace Niagara
 		VkFormat m_ColorFormat{};
 		VkFormat m_DepthFormat{};
 		VkViewport m_MainViewport{};
+		VkRect2D m_RenderArea{};
 		
 		bool m_bResized{ false };
 		bool m_bFlipViewport{ true };
+
+		std::unique_ptr<RGBuilder> m_GraphBuilder;
 
 	private:
 		GLFWwindow* m_Window{ nullptr };

@@ -2,6 +2,7 @@
 
 #include "pch.h"
 #include "VkCommon.h"
+#include "Utilities.h"
 #include <vk_mem_alloc.h>
 
 
@@ -20,6 +21,7 @@ namespace Niagara
 		VkDeviceSize memOffset{ 0 };
 		VkBufferUsageFlags bufferUsage{ 0 };
 
+		std::string name;
 		uint8_t* mappedData{ nullptr };
 		// Whether the buffer has been mapped with vmaMapMemory
 		bool mapped{ false };
@@ -28,9 +30,8 @@ namespace Niagara
 
 		static void Copy(Buffer& dstBuffer, const Buffer& srcBuffer);
 
-		Buffer() = default;
-		Buffer(const Buffer&) = delete;
-		Buffer& operator=(const Buffer&) = delete;
+		Buffer(const std::string &inName = "") : name{inName} { }
+		// NON_COPYABLE(Buffer);
 
 		operator VkBuffer() const { return buffer; }
 

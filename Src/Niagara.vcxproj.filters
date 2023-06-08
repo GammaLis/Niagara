@@ -222,6 +222,9 @@
     <ClCompile Include="Triangle.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="RenderGraph\RenderGraphBuilder.cpp">
+      <Filter>RenderGraph</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\External\glfw\src\platform.h">
@@ -322,6 +325,9 @@
     </ClInclude>
     <ClInclude Include="Renderer.h">
       <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="RenderGraph\RenderGraphBuilder.h">
+      <Filter>RenderGraph</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

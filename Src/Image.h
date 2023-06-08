@@ -64,16 +64,17 @@ namespace Niagara
 		VkClearValue clearValue{};
 		std::vector<ImageView> views;
 
+		std::string name;
 		VkImageLayout layout{ VK_IMAGE_LAYOUT_UNDEFINED };
 
 		uint8_t* mappedData{ nullptr };
 		bool isMapped{ false };
 
-		Image() = default;
-		NON_COPYABLE(Image);
+		Image(const std::string &inName = "") : name{inName} { }
+		// NON_COPYABLE(Image);
 
-		void Init(const Device &device, const VkExtent3D& extent, VkFormat format,
-			VkImageUsageFlags imageUsage, VkImageCreateFlags flags, VkMemoryPropertyFlags memPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		void Init(const Device &device, const VkExtent3D& extent, VkFormat format, VkImageUsageFlags imageUsage, 
+			VkImageCreateFlags flags = 0, VkMemoryPropertyFlags memPropertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			uint32_t mipLevels = 1, uint32_t arrayLayers = 1, VkClearValue clearValue = s_ClearBlack,
 			VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL,
 			const uint32_t* queueFamilies = nullptr, uint32_t queueFamilyCount = 0);

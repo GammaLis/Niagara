@@ -14,6 +14,9 @@ namespace Niagara
 	class Image;
 	class Texture;
 	class ImageView;
+	class Buffer;
+
+	struct AccessedAttachment;
 
 	enum class EQueueFamily
 	{
@@ -30,6 +33,11 @@ namespace Niagara
 	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags, VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask);
 	void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkImageAspectFlags aspectFlags, EQueueFamily queueFamily = EQueueFamily::Graphics);
 	void InitializeTexture(const Device &device, Texture& texture, const void *pInitData, size_t size);
+	void ClearImage(VkCommandBuffer cmd, Image& image);
+	void BlitImage(VkCommandBuffer cmd, const Image& src, const Image& dst,
+		const VkOffset3D& srcOffset, const VkOffset3D& dstOffset, const VkExtent3D& srcExtent, const VkExtent3D& dstExtent,
+		uint32_t srcLevel, uint32_t dstLevel, uint32_t srcBaseLayer = 0, uint32_t dstBaseLayer = 0, VkFilter filter = VK_FILTER_LINEAR, uint32_t numLayers = 1);
+	void GenerateMipmap(VkCommandBuffer cmd, Image& image);
 
 
 	// Ref: nvpro_nvvk
@@ -211,6 +219,7 @@ namespace Niagara
 		void SetAttachments(Attachment* pColorAttachments, uint32_t colorAttachmentCount, LoadStoreInfo* pColorLoadStoreInfos, VkClearColorValue *pClearColorValues = nullptr,
 			Attachment* pDepthAttachment = nullptr, LoadStoreInfo* pDepthLoadStoreInfo = nullptr, VkClearDepthStencilValue *pClearDepthValue = nullptr);
 		void SetAttachments(const std::vector<std::pair<Image*, LoadStoreInfo>> &colorAttachments, const std::pair<Image*, LoadStoreInfo> &depthAttachment);
+		void SetAttachments(const std::vector<AccessedAttachment> &colorAttachments, const AccessedAttachment &depthAttachment);
 
 		void BeginRendering(VkCommandBuffer cmd, const VkRect2D& renderArea);
 
@@ -300,13 +309,18 @@ namespace Niagara
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
-		void ImageBarrier2(Image &image, VkImageLayout newLayout,
+		// Deprecated
+		void ImageBarrier2_Deprecated(Image &image, VkImageLayout newLayout,
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
+
+		void ImageBarrier2(Image& image, VkImageLayout newLayout, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
 		void BufferBarrier2(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
 			VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
 			VkAccessFlags2 srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
+
+		void BufferBarrier2(Buffer &buffer, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT);
 
 		void PipelineBarriers2(VkCommandBuffer cmd);
 

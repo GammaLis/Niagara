@@ -4,6 +4,8 @@
 #include "Buffer.h"
 #include "CommandManager.h"
 #include "Utilities.h"
+#include "Renderer.h"
+
 #include <iostream>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -227,6 +229,8 @@ namespace Niagara
 		CreateImageView(device, GetImageViewType(type, arrayLayers), 0, 0, mipLevels, arrayLayers);
 
 		layout = VK_IMAGE_LAYOUT_UNDEFINED;
+		if (name != "")
+			g_AccessMgr.AddResourceAccess(name);
 	}
 
 	void Image::Destroy(const Device& device)
@@ -408,19 +412,16 @@ namespace Niagara
 				switch (comp)
 				{
 				case 1:
-					format = VK_FORMAT_R8_UNORM;
-					break;
+					format = VK_FORMAT_R8_UNORM; break;
 				case 2:
-					format = VK_FORMAT_R8G8_UNORM;
-					break;
+					format = VK_FORMAT_R8G8_UNORM; break;
+					// ??? 
 					// Format VK_FORMAT_R8G8B8_UNORM is not supported for this combination of parameters
 				case 3:
-					format = sRGB ? VK_FORMAT_R8G8B8_SRGB : VK_FORMAT_R8G8B8_UNORM;
-					break;
+					format = sRGB ? VK_FORMAT_R8G8B8_SRGB : VK_FORMAT_R8G8B8_UNORM; break;
 				default:
 				case 4:
-					format = sRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
-					break;
+					format = sRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM; break;
 				}
 
 				VkDeviceSize size = x * y * comp;

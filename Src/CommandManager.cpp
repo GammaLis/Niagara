@@ -1,17 +1,19 @@
 #include "CommandManager.h"
 #include "Device.h"
 #include "Image.h"
+#include "Buffer.h"
 #include "Renderer.h"
+#include "RenderGraph/RenderGraphBuilder.h"
 
 namespace Niagara
 {
-	// Globals variables
+	/// Globals variables
 
 	CommandManager g_CommandMgr{};
 	CommandContext g_CommandContext{};
 
 
-	// Global functions
+	/// Global functions
 
 	VkCommandBuffer BeginSingleTimeCommands(EQueueFamily queueFamily)
 	{
@@ -141,6 +143,86 @@ namespace Niagara
 		}
 
 		stagingBuffer.Destroy(device);
+	}
+
+	void ClearImage(VkCommandBuffer cmd, Image& image)
+	{
+		if (image.subresource.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
+			vkCmdClearDepthStencilImage(cmd, image, image.layout, &image.clearValue.depthStencil, 1, &image.views[0].subresourceRange);
+		else
+			vkCmdClearColorImage(cmd, image, image.layout, &image.clearValue.color, 1, &image.views[0].subresourceRange);
+	}
+
+	void BlitImage(VkCommandBuffer cmd, const Image& src, const Image& dst,
+		const VkOffset3D& srcOffset, const VkOffset3D& dstOffset, const VkExtent3D& srcExtent, const VkExtent3D& dstExtent,
+		uint32_t srcLevel, uint32_t dstLevel, uint32_t srcBaseLayer, uint32_t dstBaseLayer, VkFilter filter, uint32_t numLayers)
+	{
+		static auto Offset = [](const VkOffset3D& o, const VkExtent3D& e) -> VkOffset3D
+		{
+			return VkOffset3D{ o.x + (int)e.width, o.y + (int)e.height, o.z + (int)e.depth };
+		};
+
+		VkImageAspectFlags srcAspectMask = src.subresource.aspectMask, dstAspectMask = dst.subresource.aspectMask;
+
+		std::vector<VkImageBlit2> blitRegions(numLayers);
+		for (uint32_t i = 0; i < numLayers; ++i)
+		{
+			auto& blit = blitRegions[i];
+
+			blit.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+			blit.srcOffsets[0] = srcOffset;
+			blit.srcOffsets[1] = Offset(srcOffset, srcExtent);
+			blit.dstOffsets[0] = dstOffset;
+			blit.dstOffsets[1] = Offset(dstOffset, dstExtent);
+			blit.srcSubresource = { srcAspectMask, srcLevel, srcBaseLayer + i, 1 };
+			blit.dstSubresource = { dstAspectMask, dstLevel, dstBaseLayer + i, 1 };
+		}
+
+		VkBlitImageInfo2 blitInfo{ VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2 };
+		blitInfo.srcImage = src.image;
+		blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		blitInfo.dstImage = dst.image;
+		blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		blitInfo.filter = filter;
+		blitInfo.pRegions = blitRegions.data();
+		blitInfo.regionCount = static_cast<uint32_t>(blitRegions.size());
+
+		vkCmdBlitImage2(cmd, &blitInfo);
+	}
+
+	void GenerateMipmap(VkCommandBuffer cmd, Image& image)
+	{
+		const VkOffset3D offset{ 0,0,0 };
+		VkExtent3D size = image.extent;
+
+		VkImageMemoryBarrier2 imageBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+		imageBarrier.image = image.image;
+		imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		imageBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		imageBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		imageBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+		imageBarrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+		imageBarrier.subresourceRange = { image.subresource.aspectMask, 0, 1, 0, 1 };
+
+		VkDependencyInfo dependencyInfo{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dependencyInfo.pImageMemoryBarriers = &imageBarrier;
+		dependencyInfo.imageMemoryBarrierCount = 1;
+
+		for (uint32_t level = 1; level < image.subresource.mipLevel; ++level)
+		{
+			vkCmdPipelineBarrier2(cmd, &dependencyInfo);
+
+			VkExtent3D srcSize = size;
+			size.width = std::max(size.width >> 1, 1u);
+			size.height= std::max(size.height>> 1, 1u);
+			size.depth = std::max(size.depth >> 1, 1u);
+			BlitImage(cmd, image, image, offset, offset, srcSize, size, level - 1, level, 0, 0, VK_FILTER_LINEAR, image.subresource.arrayLayer);
+
+			imageBarrier.subresourceRange.baseMipLevel = level;
+		}
 	}
 
 	
@@ -452,6 +534,41 @@ namespace Niagara
 		cachedDepthResolve.view = nullptr;
 	}
 
+	void CommandContext::SetAttachments(const std::vector<AccessedAttachment>& colorAttachments, const AccessedAttachment& depthAttachment)
+	{
+		uint32_t colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
+
+		assert(colorAttachmentCount < s_MaxAttachments);
+
+		activeColorAttachmentCount = colorAttachmentCount;
+
+		for (uint32_t i = 0; i < colorAttachmentCount; ++i)
+		{
+			auto attachment = colorAttachments[i];
+			cachedColorAttachments[i].view = attachment.texture->GetPhysicalResource()->views[0];
+			cachedColorAttachments[i].layout = attachment.layout;
+
+			cachedColorLoadStoreInfos[i] = attachment.loadStoreInfo;
+			cachedColorClearValues[i] = attachment.texture->GetPhysicalResource()->clearValue;
+		}
+
+		if (depthAttachment.texture != nullptr)
+		{
+			cachedDepthAttachment.view = depthAttachment.texture->GetPhysicalResource()->views[0];
+			cachedDepthAttachment.layout = depthAttachment.layout;
+
+			cachedDepthLoadStoreInfo = depthAttachment.loadStoreInfo;
+			cachedDepthClearValue.depthStencil = depthAttachment.texture->GetPhysicalResource()->clearValue.depthStencil;
+		}
+		else
+		{
+			cachedDepthAttachment.view = VK_NULL_HANDLE;
+		}
+
+		// TODO:
+		cachedDepthResolve.view = nullptr;
+	}
+
 	void CommandContext::BeginRendering(VkCommandBuffer cmd, const VkRect2D& renderArea)
 	{
 		// Colors
@@ -733,7 +850,7 @@ namespace Niagara
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	}
 
-	void CommandContext::ImageBarrier2(Image &image, VkImageLayout newLayout, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+	void CommandContext::ImageBarrier2_Deprecated(Image &image, VkImageLayout newLayout, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
 	{
 		assert(activeImageMemoryBarriers2 < s_MaxBarrierNum);
 
@@ -751,6 +868,33 @@ namespace Niagara
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	}
 
+	void CommandContext::ImageBarrier2(Image& image, VkImageLayout newLayout, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 dstAccessMask)
+	{
+		assert(activeImageMemoryBarriers2 < s_MaxBarrierNum);
+		assert(image.name != "");
+
+		const auto& srcDetail = g_AccessMgr.GetAccessDetail(image.name);
+		AccessDetail dstDetail{ dstStageMask, dstAccessMask, newLayout };
+		
+		if (dstDetail.NearlyEqual(srcDetail))
+			return;
+
+		g_AccessMgr.UpdateAccess(image.name, dstDetail);
+
+		auto& barrier2 = cachedImageMemoryBarriers2[activeImageMemoryBarriers2++];
+		barrier2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		barrier2.image = image;
+		barrier2.subresourceRange = image.views[0].subresourceRange;
+		barrier2.oldLayout = srcDetail.layout;
+		barrier2.newLayout = image.layout = dstDetail.layout;
+		barrier2.srcAccessMask = srcDetail.access;
+		barrier2.dstAccessMask = dstDetail.access;
+		barrier2.srcStageMask = srcDetail.pipelineStage;
+		barrier2.dstStageMask = dstDetail.pipelineStage;
+		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
 	void CommandContext::BufferBarrier2(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
 	{
 		assert(activeBufferMemoryBarriers2 < s_MaxBarrierNum);
@@ -764,6 +908,32 @@ namespace Niagara
 		barrier2.dstAccessMask = dstAccessMask;
 		barrier2.srcStageMask = srcStageMask;
 		barrier2.dstStageMask = dstStageMask;
+		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	}
+
+	void CommandContext::BufferBarrier2(Buffer& buffer, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 dstAccessMask)
+	{
+		assert(activeBufferMemoryBarriers2 < s_MaxBarrierNum);
+		assert(buffer.name != "");
+
+		const auto& srcDetail = g_AccessMgr.GetAccessDetail(buffer.name);
+		AccessDetail dstDetail{ dstStageMask, dstAccessMask };
+		
+		if (dstDetail.NearlyEqual(srcDetail))
+			return;
+
+		g_AccessMgr.UpdateAccess(buffer.name, dstDetail);
+
+		auto& barrier2 = cachedBufferMemoryBarriers2[activeBufferMemoryBarriers2++];
+		barrier2.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+		barrier2.buffer = buffer;
+		barrier2.size = buffer.size;
+		barrier2.offset = 0;
+		barrier2.srcAccessMask = srcDetail.access;
+		barrier2.dstAccessMask = dstDetail.access;
+		barrier2.srcStageMask = srcDetail.pipelineStage;
+		barrier2.dstStageMask = dstDetail.pipelineStage;
 		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	}
@@ -788,6 +958,8 @@ namespace Niagara
 
 			activeBufferMemoryBarriers2 = 0;
 			activeImageMemoryBarriers2 = 0;
+
+			g_AccessMgr.Flush();
 		}
 	}
 

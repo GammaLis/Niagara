@@ -1,13 +1,20 @@
 #include "Renderer.h"
 #include "CommandManager.h"
 #include "VkQuery.h"
+#include "RenderGraph/RenderGraphBuilder.h"
+
 #include <iostream>
+
+#define USE_RENDERGRAPH 1
 
 
 namespace Niagara
 {
+	/// Globals
+
 	CommonStates g_CommonStates{};
 	BufferManager g_BufferMgr{};
+	AccessManager g_AccessMgr{};
 
 
 	/// Debug
@@ -60,6 +67,7 @@ namespace Niagara
 
 
 	/// CommonStates 
+
 	void CommonStates::Init(const Device& device)
 	{
 		// Rasterization states
@@ -132,6 +140,18 @@ namespace Niagara
 			attachmentBlendAdditive.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
 		}
 
+		// Load store actions
+		{
+			loadStoreDefault.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+			loadStoreDefault.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+			lClearSStore = loadStoreDefault;
+			lClearSStore.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+
+			lDontCareSStore = loadStoreDefault;
+			lDontCareSStore.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		}
+
 		// Samplers
 		{
 			linearClampSampler.Init(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
@@ -182,6 +202,91 @@ namespace Niagara
 
 		colorBuffer.Destroy(device);
 		depthBuffer.Destroy(device);
+	}
+
+
+	/// AccessDetail
+
+	AccessDetail::AccessDetail(VkPipelineStageFlags2 inStageMask, VkAccessFlags2 inAccessMask, VkImageLayout inLayout)
+		: pipelineStage{ inStageMask }, access{ inAccessMask }, layout{ inLayout }
+	{}
+
+	void AccessManager::AddResourceAccess(const std::string& name)
+	{
+		auto iter = m_ResourceAccesses.find(name);
+		if (iter == m_ResourceAccesses.end())
+			m_ResourceAccesses[name] = AccessDetail();
+	}
+	
+	void AccessManager::RemoveResourceAccess(const std::string& name)
+	{
+		auto iter = m_ResourceAccesses.find(name);
+		if (iter != m_ResourceAccesses.end())
+			m_ResourceAccesses.erase(name);
+	}
+
+	void AccessManager::Invalidate()
+	{
+		if (!m_ResourceAccesses.empty())
+		{
+			for (auto& access : m_ResourceAccesses)
+				access.second.Reset();
+		}
+		m_PoolCount = 0;
+	}
+	
+	void AccessManager::UpdateAccess(const std::string& name, const AccessDetail& access, bool bImmediate)
+	{
+		if (bImmediate)
+		{
+			auto iter = m_ResourceAccesses.find(name);
+			if (iter != m_ResourceAccesses.end())
+				iter->second = access;
+		}
+		else
+		{
+			assert(m_PoolCount < s_MaxPoolSize);
+
+			auto& cache = m_Pool[m_PoolCount++];
+			cache.first = name;
+			cache.second = access;
+		}
+	}
+
+	void AccessManager::Flush()
+	{
+		if (m_PoolCount > 0)
+		{
+			for (uint32_t i = 0; i < m_PoolCount; ++i)
+			{
+				const auto& cache = m_Pool[i];
+				UpdateAccess(cache.first, cache.second, true);
+			}
+			m_PoolCount = 0;
+		}
+	}
+
+	bool AccessManager::GetAccessDetail(const std::string& name, AccessDetail& access)
+	{
+		auto iter = m_ResourceAccesses.find(name);
+		if (iter != m_ResourceAccesses.end())
+		{
+			access = iter->second;
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	AccessDetail AccessManager::GetAccessDetail(const std::string& name)
+	{
+		auto iter = m_ResourceAccesses.find(name);
+		if (iter != m_ResourceAccesses.end())
+			return iter->second;
+
+		return AccessDetail{};
 	}
 
 
@@ -247,6 +352,8 @@ namespace Niagara
 
 			m_ExtNextChain = &features11.pNext;
 		}
+
+		m_GraphBuilder.reset(new RGBuilder());
 	}
 
 	Renderer::~Renderer() 
@@ -278,7 +385,8 @@ namespace Niagara
 
 		m_ViewportSize = m_Swapchain.extent;
 		m_RenderExtent = m_ViewportSize;
-		m_MainViewport = GetViewport({ {0, 0}, m_RenderExtent }, 0, 1, m_bFlipViewport);
+		m_RenderArea = { {0, 0}, m_RenderExtent };
+		m_MainViewport = GetViewport(m_RenderArea, 0, 1, m_bFlipViewport);
 		m_ColorFormat = m_Swapchain.colorFormat;
 		m_DepthFormat = m_Device.GetSupportedDepthFormat(false);
 
@@ -289,6 +397,10 @@ namespace Niagara
 
 		g_BufferMgr.InitViewDependentBuffers(*this);
 		g_TextureMgr.Init(m_Device, s_ResourcePath + "Textures/");
+
+		// Render graph
+		m_GraphBuilder->Init(this);
+		RegisterExternalResources();
 
 		// Sync
 		InitFrameResources();
@@ -303,6 +415,8 @@ namespace Niagara
 		OnDestroy();
 
 		DestroyFrameResources();
+
+		m_GraphBuilder->Destroy();
 
 		g_BufferMgr.Cleanup(m_Device);
 		g_TextureMgr.Cleanup(m_Device);
@@ -332,8 +446,11 @@ namespace Niagara
 		auto& frameResource = m_FrameResources[m_FrameIndex % MAX_FRAMES_IN_FLIGHT];
 		SyncObjects& sync = frameResource.syncObjects;
 
+		// No need to reset every frame if nothing changed
+		// m_GraphBuilder->Reset();
 		m_ActiveCmds.clear();
 		g_CommandContext.Invalidate();
+		g_AccessMgr.Invalidate();		
 
 		// Fetch back buffer
 		VkFence waitFences[] = { sync.inFlightFence };
@@ -355,19 +472,25 @@ namespace Niagara
 
 		// Only reset fences if we are submitting work
 		vkResetFences(m_Device, ARRAYSIZE(waitFences), waitFences);
-
+		
 		OnRender();
+
+		// RenderGraph: After
+		{
+			if (!m_GraphBuilder->IsCacheValid())
+				m_GraphBuilder->Compile();
+
+			m_GraphBuilder->Execute();
+		}
 
 		auto presentCmd = GetCommandBuffer();
 		{
 			g_CommandContext.BeginCommandBuffer(presentCmd);
 
-			auto &colorBuffer = g_BufferMgr.colorBuffer;
+			auto& colorBuffer = g_BufferMgr.colorBuffer;
 			auto backBuffer = m_Swapchain.images[imageIndex];
 
-			g_CommandContext.ImageBarrier2(colorBuffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-				VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-				VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+			g_CommandContext.ImageBarrier2(colorBuffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 			g_CommandContext.ImageBarrier2(backBuffer, VK_IMAGE_ASPECT_COLOR_BIT,
 				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 				VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -378,9 +501,7 @@ namespace Niagara
 				VkRect2D{ {0,0}, {colorBuffer.extent.width, colorBuffer.extent.height} },
 				VkRect2D{ {0,0}, {m_Swapchain.extent} });
 
-			g_CommandContext.ImageBarrier2(colorBuffer, VK_IMAGE_LAYOUT_GENERAL,
-				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-				VK_ACCESS_2_TRANSFER_READ_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+			g_CommandContext.ImageBarrier2(colorBuffer, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
 			g_CommandContext.ImageBarrier2(backBuffer, VK_IMAGE_ASPECT_COLOR_BIT,
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
 				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
@@ -437,8 +558,14 @@ namespace Niagara
 			m_Swapchain.UpdateSwapchain(m_Device, m_Window, false);
 			m_ViewportSize = m_Swapchain.extent;
 			m_RenderExtent = m_ViewportSize;
-			m_MainViewport = GetViewport({ {0, 0}, m_RenderExtent }, 0, 1, m_bFlipViewport);
+			m_RenderArea = { {0, 0}, m_RenderExtent };
+			m_MainViewport = GetViewport(m_RenderArea, 0, 1, m_bFlipViewport);
 			m_ColorFormat = m_Swapchain.colorFormat;
+		}
+
+		// Update RenderGraph
+		{
+			m_GraphBuilder->Init(this);
 		}
 
 		// Recreate buffers 
@@ -542,17 +669,15 @@ namespace Niagara
 
 	void Renderer::OnRender()
 	{
+		Image& colorBuffer = g_BufferMgr.colorBuffer;
+
+#if !USE_RENDERGRAPH
 		auto cmd = GetCommandBuffer();
 		g_CommandContext.BeginCommandBuffer(cmd);
 
-		Image& colorBuffer = g_BufferMgr.colorBuffer;
-
 		// Transition
 		{
-			g_CommandContext.ImageBarrier2(colorBuffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-				VK_ACCESS_2_NONE, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-
+			g_CommandContext.ImageBarrier2(colorBuffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 			g_CommandContext.PipelineBarriers2(cmd);
 		}
 
@@ -578,5 +703,47 @@ namespace Niagara
 		}
 
 		g_CommandContext.EndCommandBuffer(cmd);
+
+#else
+		{
+			struct Parameters
+			{
+				RGTextureRef colorAttachment{ nullptr };
+			} params;
+			params.colorAttachment = m_GraphBuilder->GetRGTexture(colorBuffer.name);
+
+			auto &pass = m_GraphBuilder->AddPass("DrawTriangle", (PassFlags)EPassFlags::Raster, std::move(params), [&, params](VkCommandBuffer cmd) {
+				vkCmdSetViewport(cmd, 0, 1, &m_MainViewport);
+				vkCmdSetScissor(cmd, 0, 1, &m_RenderArea);
+
+				g_CommandContext.BindPipeline(cmd, m_TrianglePipeline);
+
+				DescriptorInfo toyTexInfo(g_CommonStates.linearClampSampler, m_ToyTexture->views[0], m_ToyTexture->layout);
+				g_CommandContext.SetDescriptor(0, toyTexInfo);
+
+				g_CommandContext.PushDescriptorSet(cmd);
+
+				vkCmdDraw(cmd, 3, 1, 0, 0);
+			});
+
+			pass.RenderArea(m_RenderArea);
+
+			if (!m_GraphBuilder->IsCacheValid())
+			{
+				pass.AddColorAttachment(params.colorAttachment, g_CommonStates.lClearSStore);
+			}
+		}
+#endif
+	}
+
+	void Renderer::RegisterExternalResources()
+	{
+		auto& colorBuffer = g_BufferMgr.colorBuffer;
+		auto& depthBuffer = g_BufferMgr.depthBuffer;
+
+		auto rgColorBuffer = m_GraphBuilder->RegisterExternalTexture(colorBuffer);
+		auto rgDepthBuffer = m_GraphBuilder->RegisterExternalTexture(depthBuffer);
+
+		m_GraphBuilder->SetOutputTexture(rgColorBuffer);
 	}
 }
