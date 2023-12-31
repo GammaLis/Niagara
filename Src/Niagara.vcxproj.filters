@@ -219,11 +219,14 @@
     <ClCompile Include="Renderer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="Triangle.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="RenderGraph\RenderGraphBuilder.cpp">
       <Filter>RenderGraph</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\External\meshoptimizer\src\quantization.cpp">
+      <Filter>meshoptimizer</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

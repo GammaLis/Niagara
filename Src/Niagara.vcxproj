@@ -172,6 +172,7 @@
     <ClCompile Include="..\External\meshoptimizer\src\indexgenerator.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\overdrawanalyzer.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\overdrawoptimizer.cpp" />
+    <ClCompile Include="..\External\meshoptimizer\src\quantization.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\simplifier.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\spatialorder.cpp" />
     <ClCompile Include="..\External\meshoptimizer\src\stripifier.cpp" />
@@ -194,6 +195,7 @@
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="Geometry.cpp" />
     <ClCompile Include="Image.cpp" />
+    <ClCompile Include="main.cpp" />
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="Renderers\Metaballs.cpp" />
     <ClCompile Include="Pipeline.cpp" />
@@ -202,7 +204,6 @@
     <ClCompile Include="Shaders.cpp" />
     <ClCompile Include="SpirvReflection.cpp" />
     <ClCompile Include="Swapchain.cpp" />
-    <ClCompile Include="Triangle.cpp" />
     <ClCompile Include="Utilities.cpp" />
     <ClCompile Include="VkCommon.cpp" />
     <ClCompile Include="VkMemoryAllocator.cpp" />

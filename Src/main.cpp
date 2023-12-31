@@ -17,7 +17,7 @@
 #include "Geometry.h"
 #include "VkQuery.h"
 
-#include "RenderGraph/RenderGraphBuilder.h"
+// #include "RenderGraph/RenderGraphBuilder.h"
 #include "Renderers/Metaballs.h"
 
 #include <iostream>
@@ -1552,7 +1552,6 @@ int main()
 	features13.maintenance4 = VK_TRUE;
 	features13.synchronization2 = VK_TRUE;
 	features13.dynamicRendering = VK_TRUE;
-	features13.synchronization2 = VK_TRUE;
 
 	VkPhysicalDeviceVulkan12Features features12{};
 	features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -1769,7 +1768,7 @@ int main()
 #if USE_MULTI_DRAW_INDIRECT
 	// Preparing indirect draw commands
 #if DEBUG_SINGLE_DRAWCALL
-	const uint32_t DrawCount = 5; //  DRAW_COUNT;
+	const uint32_t DrawCount = 1; //  DRAW_COUNT;
 
 	float testZ = 7.0f, farZ = -10.0f;
 	std::vector<glm::vec3> positions

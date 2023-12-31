@@ -27,13 +27,13 @@ void main()
 
 // Some built-in arrays
 // Write only access
-out uint gl_PrimitivePointIndicesEXT[];
+out uint  gl_PrimitivePointIndicesEXT[];
 out uvec2 gl_PrimitiveLineIndicesEXT[];
 out uvec3 gl_PrimitiveTriangleIndicesEXT[];
 
 // Write only access
 out gl_MeshPerVertexEXT {
-	vec4 gl_Position;
+	vec4  gl_Position;
 	float gl_PointSize;
 	float gl_ClipDistance[];
 	float gl_CullDistance[];

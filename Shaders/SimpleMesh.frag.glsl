@@ -30,8 +30,15 @@ layout (location = 0) out vec4 outColor;
 void main()
 {
 #if DEBUG_MODE == DEBUG_MODE_NORMAL
+
+#if 1
     vec3 N = SafeNormalize(normal);
     outColor = vec4(N * 0.5 + 0.5, 1.0) * _View.debugValue;
+
+#else
+    // Debug meshlet
+    outColor = vec4(normal, 1.0);
+#endif
 
 #elif DEBUG_MODE == DEBUG_MODE_UV
     outColor = vec4(uv, 0, 1);

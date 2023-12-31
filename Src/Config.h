@@ -18,12 +18,14 @@
 #define USE_PACKED_PRIMITIVE_INDICES_NV 0
 // Mesh shader needs the 8bit_16bit_extension
 
+#define DRAW_METABALLS 0
+
 namespace Niagara
 {
 	/// Global variables
 
-	constexpr uint32_t WIDTH = 800;
-	constexpr uint32_t HEIGHT = 600;
+	constexpr uint32_t WIDTH = 800;	// 800 1920
+	constexpr uint32_t HEIGHT = 600;	// 600 1080
 
 	constexpr uint32_t MESHLET_MAX_VERTICES = 64;
 	constexpr uint32_t MESHLET_MAX_PRIMITIVES = 84;
@@ -32,6 +34,10 @@ namespace Niagara
 
 	constexpr uint32_t TASK_GROUP_SIZE = 64;
 #if 1
+	constexpr uint32_t DRAW_COUNT = 1'000'000;
+	constexpr float SCENE_RADIUS = 300.0f;
+	constexpr float MAX_DRAW_DISTANCE = 200.0f;
+#elif 0
 	constexpr uint32_t DRAW_COUNT = 100'000;
 	constexpr float SCENE_RADIUS = 160.0f;
 	constexpr float MAX_DRAW_DISTANCE = 120.0f;

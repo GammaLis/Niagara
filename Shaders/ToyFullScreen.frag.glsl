@@ -29,6 +29,7 @@ layout (binding = 5) uniform sampler2D depthPyramid;
 
 
 layout (location = 0) in vec2 uv;
+layout (location = 1) in vec3 inColor;
 
 layout (location = 0) out vec4 outColor;
 
@@ -55,6 +56,8 @@ void main()
 
 	color.rgb = vec3(0.0);
 
+	color.rgb = inColor;
+
 	const uint MaxDrawCount = _View.drawCount;
 
 	const uint earlyDrawCount = drawCounts[0];
@@ -69,7 +72,7 @@ void main()
 	bool culled = drawCount < MaxDrawCount;
 	uint culledDraws = 0;
 	
-#if 1
+#if 0
 	for(uint i = 0; i < MaxDrawCount; ++i)
 	{
 		const MeshDraw meshDraw = draws[i];
